@@ -65,7 +65,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
                     >
                         {title}
                     </h1>
-                    {onTitleClick && <span className="text-xs text-muted-foreground ml-2 border px-2 py-0.5 rounded">Rename</span>}
+
                 </header>
 
                 <div className="flex-1 overflow-hidden relative">
