@@ -5,7 +5,7 @@ import { recognizeTextFromCanvas } from '../../utils/ocr';
 import { v4 as uuidv4 } from 'uuid';
 import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { useLongPress } from 'use-long-press'; // Try to avoid adding new deps if possible, implementing simple logic
+// import { useLongPress } from 'use-long-press'; // Removed unused
 
 interface MemoEditorProps {
     noteId: string;
@@ -129,7 +129,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             const isSelected = selectedIds.has(el.id);
             ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
             ctx.fillStyle = el.color; // For textMainly
-            ctx.lineWidth = isSelected ? (el.width + 2) : el.width;
+            const elWidth = el.type === 'text' ? 0 : el.width;
+            ctx.lineWidth = isSelected ? (elWidth + 2) : elWidth;
             if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
             ctx.shadowColor = '#3b82f6';
 
