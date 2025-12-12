@@ -10,7 +10,7 @@ import { cn } from '../../lib/utils';
 interface MemoEditorProps {
     noteId: string;
     onBack: () => void;
-    onLinkClick: (title: string) => void;
+    onLinkClick: (title: string) => Promise<'OPEN' | 'DELETE' | 'CANCEL'>;
     externalTitle?: string;
 }
 
@@ -700,14 +700,26 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             // Check for Link Navigation (Tap in View Mode)
             if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
                 const pt = getLocalPoint(e.clientX, e.clientY);
-                // Find top-most element with link
-                for (let i = elements.length - 1; i >= 0; i--) {
-                    const el = elements[i];
-                    if (el.link && isPointNearElement(pt, el, 10)) {
-                        onLinkClick(el.link);
-                        break;
+                // Check handlers async
+                (async () => {
+                    // Find top-most element with link
+                    for (let i = elements.length - 1; i >= 0; i--) {
+                        const el = elements[i];
+                        if (el.link && isPointNearElement(pt, el, 10)) {
+                            const action = await onLinkClick(el.link);
+                            if (action === 'DELETE') {
+                                setElements(prev => prev.map(item => {
+                                    if (item.id === el.id) {
+                                        const { link, ...rest } = item;
+                                        return rest; // Remove link property
+                                    }
+                                    return item;
+                                }));
+                            }
+                            break;
+                        }
                     }
-                }
+                })();
             }
         }
     };
@@ -855,9 +867,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     <span
                         key={i}
                         className="text-blue-600 underline cursor-pointer hover:text-blue-800"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                             e.stopPropagation();
-                            onLinkClick(content);
+                            const action = await onLinkClick(content);
+                            if (action === 'DELETE') {
+                                // Remove this link syntax from text content
+                                // This is a bit brute-force, replacing ALL instances of this specific link
+                                // But since there's no unique ID for text parts, it's the safest assumption
+                                const linkStr = `[[${content}]]`;
+                                setNoteContent(prev => prev.replaceAll(linkStr, content)); // Keep content, remove brackets
+                            }
                         }}
                     >
                         {content}

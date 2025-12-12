@@ -51,15 +51,22 @@ function App() {
     );
   }
 
-  const handleLinkClick = async (title: string) => {
+  const handleLinkClick = async (title: string): Promise<'OPEN' | 'DELETE' | 'CANCEL'> => {
     const cleanTitle = title.replace(/^\[\[|\]\]$/g, '');
     const existing = await db.notes.where('title').equals(cleanTitle).first();
 
     if (existing) {
       setNoteHistory(prev => [...prev, existing.id]);
+      return 'OPEN';
     } else {
-      // Prompt before creating a missing linked note
-      if (confirm(`Linked note "${cleanTitle}" not found. Create it?`)) {
+      // Prompt: Create new or Delete link?
+      // User requested: "Delete links where link destination is gone"
+      // We offer a choice because maybe they just haven't created it yet.
+      // But phrasing "Links to gone destinations should be deleted" implies stronger cleanup.
+      // Let's prompt: "Note not found. [Create] [Delete Link] [Cancel]"
+      // Using browser confirm/prompt is limited. We'll use a confirm for Create, and if No, maybe another confirm?
+      // Or just a primitive flow:
+      if (confirm(`Linked note "${cleanTitle}" not found.\n\nClick OK to CREATE it.\nClick Cancel to DELETE the link.`)) {
         const id = uuidv4();
         await db.notes.add({
           id,
@@ -70,7 +77,16 @@ function App() {
           updatedAt: Date.now()
         });
         setNoteHistory(prev => [...prev, id]);
+        return 'OPEN';
+      } else {
+        // If they cancelled creation, ask if they want to delete the link?
+        // Or just assume Cancel = Delete? That's dangerous.
+        // Let's ask explicitly.
+        if (confirm(`Remove the broken link to "${cleanTitle}"?`)) {
+          return 'DELETE';
+        }
       }
+      return 'CANCEL';
     }
   };
 
