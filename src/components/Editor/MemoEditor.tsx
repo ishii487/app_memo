@@ -944,16 +944,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
             </div>
 
-            {/* Main Title Input (Fixed below toolbar) */}
-            <div className="px-4 py-2 z-40 bg-white border-b">
-                <input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    placeholder="Title"
-                    className="text-2xl font-bold w-full outline-none"
-                />
-            </div>
+
 
             {/* Canvas Container */}
             <div
