@@ -304,7 +304,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         if (el.type === 'text') {
-            const t = threshold;
+            const _ = threshold; // Unused
             // Rough bounding box for hit test
             // Assume width based on char count * fontSize * 0.6
             const w = el.content.length * el.fontSize * 0.6;
