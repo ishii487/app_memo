@@ -727,6 +727,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 title: title,
                 content: '',
                 drawings: [],
+                folderId: 'root',
                 createdAt: Date.now(),
                 updatedAt: Date.now()
             };
