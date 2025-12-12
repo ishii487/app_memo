@@ -261,107 +261,179 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             lastCenter.current = null;
         }
 
-        // @ts-ignore
-        newElement.params = shape.params;
-    }
-}
-setElements(prev => [...prev, newElement]);
-setCurrentStroke([]);
+        if (currentStrokeRef.current.length > 0) {
+            if (e.pointerType === 'pen' || activePointers.current.size === 0) {
+                commitStroke();
             }
         }
     };
 
-// ... handleOCR, insertLink, renderContentView ...
-// (Rest of helper functions need to be preserved or just assumed implicit in this replace?
-// The instructions say "rewrite component". I must provide full body of returned JSX at least)
+    const commitStroke = () => {
+        const stroke = currentStrokeRef.current;
+        if (stroke.length === 0) return;
 
-// Helper functions need to be inside component or assumed. 
-// I need to include them to be safe since I'm targeting a large block.
-// I will copy them from previous view.
+        if (mode === 'eraser') {
+            currentStrokeRef.current = [];
+            setTick(t => t + 1);
+            return;
+        }
 
-// ... [handleOCR same as before] ...
-// ... [insertLink same as before] ...
-// ... [renderContentView same as before] ...
+        let newElement: DrawingElement = {
+            type: 'stroke',
+            points: stroke,
+            color: 'black',
+            width: 2,
+            id: uuidv4(),
+            // @ts-ignore
+            params: {}
+        };
 
-// To save tokens/complexity, I will only output the changed parts if possible, but
-// since I am changing the render structure (wrapping div), I need to output the main render.
+        if (autoShape) {
+            const shape = recognizeShape(stroke);
+            if (shape) {
+                newElement = { ...newElement, ...shape } as DrawingElement;
+            }
+        }
 
-return (
-    <div className="flex flex-col h-full bg-white relative overflow-hidden">
-        {/* Toolbar (Fixed) */}
-        <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
-            <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
-            <div className="h-6 w-px bg-border mx-2" />
-            <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
-            <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
-            <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
-            <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
-            <div className="h-6 w-px bg-border mx-2" />
-            <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
-                <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
-                <span>Shape</span>
-            </label>
-            <div className="flex-1" />
-            {mode === 'text' && <button onClick={insertLink} className="p-2 hover:bg-muted"><LinkIcon size={18} /></button>}
-            <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted"><ScanText size={18} /></button>
-            <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
-            <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
-        </div>
+        setElements(prev => [...prev, newElement]);
+        currentStrokeRef.current = [];
+        setTick(t => t + 1);
+    };
 
-        {/* Main Title Input (Fixed below toolbar) */}
-        <div className="px-4 py-2 z-40 bg-white border-b">
-            <input
-                type="text"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                placeholder="Title"
-                className="text-2xl font-bold w-full outline-none"
-            />
-        </div>
+    const handleOCR = async () => {
+        if (!canvasRef.current) return;
+        setIsProcessingOCR(true);
+        try {
+            const text = await recognizeTextFromCanvas(canvasRef.current);
+            if (text) {
+                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
+                    setNoteContent(prev => prev + (prev ? '\n' : '') + text);
+                    setElements([]);
+                    setMode('text');
+                }
+            } else {
+                alert("No text detected.");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("OCR failed.");
+        } finally {
+            setIsProcessingOCR(false);
+        }
+    };
 
-        {/* Canvas Container - The Viewport */}
-        <div
-            className="flex-1 relative overflow-hidden bg-gray-50 touch-none"
-            ref={containerRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerLeave={onPointerUp}
-        >
-            {/* Transformed Layer */}
+    const insertLink = () => {
+        if (!textareaRef.current) return;
+        const start = textareaRef.current.selectionStart;
+        const end = textareaRef.current.selectionEnd;
+        const text = noteContent;
+        const selection = text.substring(start, end);
+        if (!selection) return;
+
+        const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
+        setNoteContent(newText);
+        setMode('view');
+    };
+
+    const renderContentView = () => {
+        const parts = noteContent.split(/(\[\[.*?\]\])/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('[[') && part.endsWith(']]')) {
+                const content = part.slice(2, -2);
+                return (
+                    <span
+                        key={i}
+                        className="text-blue-600 underline cursor-pointer hover:text-blue-800"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onLinkClick(content);
+                        }}
+                    >
+                        {content}
+                    </span>
+                );
+            }
+            return <span key={i}>{part}</span>;
+        });
+    };
+
+
+    return (
+        <div className="flex flex-col h-full bg-white relative overflow-hidden">
+            {/* Toolbar (Fixed) */}
+            <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
+                <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
+                <div className="h-6 w-px bg-border mx-2" />
+                <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
+                <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
+                <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
+                <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
+                <div className="h-6 w-px bg-border mx-2" />
+                <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
+                    <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
+                    <span>Shape</span>
+                </label>
+                <div className="flex-1" />
+                {mode === 'text' && <button onClick={insertLink} className="p-2 hover:bg-muted"><LinkIcon size={18} /></button>}
+                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted"><ScanText size={18} /></button>
+                <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
+                <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
+            </div>
+
+            {/* Main Title Input (Fixed below toolbar) */}
+            <div className="px-4 py-2 z-40 bg-white border-b">
+                <input
+                    type="text"
+                    value={title}
+                    onChange={e => setTitle(e.target.value)}
+                    placeholder="Title"
+                    className="text-2xl font-bold w-full outline-none"
+                />
+            </div>
+
+            {/* Canvas Container - The Viewport */}
             <div
-                style={{
-                    transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-                    transformOrigin: '0 0',
-                    width: '100%',
-                    height: '100%',
-                    willChange: 'transform'
-                }}
+                className="flex-1 relative overflow-hidden bg-gray-50 touch-none"
+                ref={containerRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerLeave={onPointerUp}
             >
-                {/* Text Content Layer */}
-                <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono", mode === 'text' && "hidden")}>
-                    {renderContentView()}
+                {/* Transformed Layer */}
+                <div
+                    style={{
+                        transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                        transformOrigin: '0 0',
+                        width: '100%',
+                        height: '100%',
+                        willChange: 'transform'
+                    }}
+                >
+                    {/* Text Content Layer */}
+                    <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono", mode === 'text' && "hidden")}>
+                        {renderContentView()}
+                    </div>
+
+                    <textarea
+                        ref={textareaRef}
+                        className={cn("absolute inset-0 w-full h-full p-6 bg-transparent resize-none outline-none leading-loose text-lg font-mono", mode !== 'text' && "hidden")}
+                        value={noteContent}
+                        onChange={(e) => setNoteContent(e.target.value)}
+                        placeholder="Start typing..."
+                    />
+
+                    <canvas
+                        ref={canvasRef}
+                        className={cn("absolute inset-0 pointer-events-none")} // Pointer events handled by container
+                    />
                 </div>
 
-                <textarea
-                    ref={textareaRef}
-                    className={cn("absolute inset-0 w-full h-full p-6 bg-transparent resize-none outline-none leading-loose text-lg font-mono", mode !== 'text' && "hidden")}
-                    value={noteContent}
-                    onChange={(e) => setNoteContent(e.target.value)}
-                    placeholder="Start typing..."
-                />
-
-                <canvas
-                    ref={canvasRef}
-                    className={cn("absolute inset-0 pointer-events-none")} // Pointer events handled by container
-                />
-            </div>
-
-            {/* Info Overlay (Debug/Status) */}
-            <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
-                {Math.round(transform.scale * 100)}%
+                {/* Info Overlay (Debug/Status) */}
+                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
+                    {Math.round(transform.scale * 100)}%
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
 };
