@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { AppLayout } from './components/Layout/AppLayout'
 import { NoteList } from './components/Features/NoteList'
 import { MemoEditor } from './components/Editor/MemoEditor'
@@ -8,6 +8,34 @@ import { v4 as uuidv4 } from 'uuid'
 function App() {
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  const [initStatus, setInitStatus] = useState<string>("Initializing...");
+
+  // Initial startup check
+  useEffect(() => {
+    const init = async () => {
+      try {
+        setInitStatus("Checking Database...");
+        await db.open();
+        setInitStatus("Loading Resources...");
+        // Small artificial delay to let user see the status if it's too fast, 
+        // reassuring them that things are working.
+        await new Promise(r => setTimeout(r, 500));
+        setInitStatus(""); // Clear status to finish loading
+      } catch (e) {
+        setInitStatus(`Error: ${e}`);
+      }
+    };
+    init();
+  }, []);
+
+  if (initStatus) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground">
+        <div className="text-xl font-bold mb-2">Memo App</div>
+        <div className="text-sm text-muted-foreground animate-pulse">{initStatus}</div>
+      </div>
+    );
+  }
 
   const handleLinkClick = async (title: string) => {
     // Clean title (remove brackets if passed)
