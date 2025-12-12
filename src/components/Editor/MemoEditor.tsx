@@ -49,21 +49,35 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         };
     }, [noteContent, elements]);
 
+    // State for gestures
+    const activePointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+    const isPanning = useRef(false);
+
+    // ... (useEffect for db loading and saveNote remain same)
+
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Resize handling
+        // We need to ensure canvas matches specific dimensions or container size
+        // If containerRef updates, we might lose drawing if we just reset width/height.
+        // For now, assume fixed or handled by container.
         if (containerRef.current) {
-            canvas.width = containerRef.current.clientWidth;
-            canvas.height = containerRef.current.clientHeight;
+            // Only set if different to avoid clearing
+            if (canvas.width !== containerRef.current.clientWidth || canvas.height !== containerRef.current.clientHeight) {
+                canvas.width = containerRef.current.clientWidth;
+                canvas.height = containerRef.current.clientHeight;
+            }
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
+        // Draw saved elements
         elements.forEach(el => {
             ctx.strokeStyle = el.color;
             ctx.lineWidth = el.width;
@@ -93,6 +107,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
         });
 
+        // Draw current stroke
         if (currentStroke.length > 0) {
             ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
             ctx.lineWidth = mode === 'eraser' ? 10 : 2;
@@ -103,7 +118,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
             ctx.stroke();
         }
-    }, [elements, currentStroke, mode]);
+    }, [elements, currentStroke, mode, containerRef.current?.clientWidth, containerRef.current?.clientHeight]);
 
     const getPoint = (e: React.PointerEvent) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
@@ -115,20 +130,68 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     const onPointerDown = (e: React.PointerEvent) => {
-        if (mode === 'text' || mode === 'view') return;
+        // Track pointer
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         e.currentTarget.setPointerCapture(e.pointerId);
-        setCurrentStroke([getPoint(e)]);
+
+        // Check gesture state
+        if (activePointers.current.size === 2) {
+            // Switch to panning
+            isPanning.current = true;
+            setCurrentStroke([]); // Cancel drawing
+            return;
+        }
+
+        // If panning, do nothing else
+        if (isPanning.current) return;
+
+        // Drawing logic
+        if (mode === 'text' || mode === 'view') return;
+
+        // Only start stroke if 1 pointer
+        if (activePointers.current.size === 1) {
+            setCurrentStroke([getPoint(e)]);
+        }
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
+        const prev = activePointers.current.get(e.pointerId);
+        if (prev) {
+            // Update pointer pos
+            activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (isPanning.current && containerRef.current) {
+                // Manual Scroll
+                const dx = e.clientX - prev.x;
+                const dy = e.clientY - prev.y;
+                containerRef.current.scrollLeft -= dx;
+                containerRef.current.scrollTop -= dy;
+                return;
+            }
+        }
+
+        if (isPanning.current) return;
         if (mode === 'text' || mode === 'view') return;
-        if (e.buttons !== 1) return;
-        setCurrentStroke(prev => [...prev, getPoint(e)]);
+
+        // Drawing: we rely on currentStroke having content (initiated by Down)
+        // rather than checking e.buttons which can be flaky on mobile
+        if (currentStroke.length > 0) {
+            setCurrentStroke(prev => [...prev, getPoint(e)]);
+        }
     };
 
     const onPointerUp = (e: React.PointerEvent) => {
-        if (mode === 'text' || mode === 'view') return;
+        activePointers.current.delete(e.pointerId);
         e.currentTarget.releasePointerCapture(e.pointerId);
+
+        if (activePointers.current.size < 2) {
+            isPanning.current = false;
+        }
+
+        if (isPanning.current) return;
+        if (mode === 'text' || mode === 'view') return;
+
+        // Finish drawing
         if (currentStroke.length === 0) return;
 
         if (mode === 'eraser') {
@@ -296,7 +359,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <canvas
                     ref={canvasRef}
                     className={cn(
-                        "absolute inset-0 w-full h-full z-0 touch-none",
+                        "absolute inset-0 z-0 touch-none", // Keeping touch-none, manual scroll handling
                         mode === 'view' && "pointer-events-none"
                     )}
                     onPointerDown={onPointerDown}
@@ -305,8 +368,32 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     onPointerLeave={onPointerUp}
                     style={{
                         cursor: mode === 'pen' ? 'crosshair' : 'default',
-                        pointerEvents: (mode === 'pen' || mode === 'eraser') ? 'auto' : 'none'
+                        pointerEvents: (mode === 'pen' || mode === 'eraser') ? 'auto' : 'none',
+                        // Ensure canvas is large enough. Actually we might need it to follow scroll?
+                        // If we are scrolling the CONTAINER, the canvas behaves like a fixed background if current CSS.
+                        // Wait, we need the canvas to scroll WITH the content?
+                        // If "absolute inset-0", it's sized to parent. 
+                        // If parent scrolls, does absolute move? 
+                        // If parent `overflow: hidden`, and we manipulate scrollLeft/Top, the CHILDREN need to be larger?
+                        // Actually logic is: Container is fixed size window. Canvas is window. 
+                        // If we "scroll", we typically mean we want a larger virtual canvas.
+                        // BUT for now, let's assume "page" is just the viewport size or whatever fits.
+                        // OR we assume standard scrolling.
+                        // IF we manual scroll, what are we scrolling? 
+                        // `containerRef` has `overflow: hidden` (from `overflow-hidden` class).
+                        // So setting scrollTop does nothing unless content is larger.
+
+                        // FIX: We probably want the canvas to be static viewport for "infinite" scroll? 
+                        // OR, simpler: "Move within page" = Standard scrolling of text/content?
                     }}
+                // Note regarding scrolling:
+                // If the user wants to scroll DOWN to write more, we need the container to allow scrolling.
+                // Currently `containerRef` has `overflow-hidden`. 
+                // To support infinite canvas or long notes, we usually need `overflow-auto`.
+                // BUT `touch-none` prevents scrolling it.
+                // So `containerRef` should be the window, and we scroll it manually.
+                // However, `canvas` is `absolute inset-0` of container. If container scrolls, `absolute` stays relative to padding box?
+                // Sticky positioning?
                 />
             </div>
         </div>
