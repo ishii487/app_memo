@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 function App() {
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
-  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+
   // History stack: last item is current note
   const [noteHistory, setNoteHistory] = useState<string[]>([]);
   const activeNoteId = noteHistory.length > 0 ? noteHistory[noteHistory.length - 1] : null;
