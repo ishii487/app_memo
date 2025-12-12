@@ -41,11 +41,26 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
                         <div className="w-8 h-8 bg-primary rounded-lg mr-3 flex items-center justify-center font-bold text-primary-foreground">M</div>
                         <span className="font-bold text-xl tracking-tight">Memo</span>
                     </div>
+                    {/* New Folder Input */}
+                    <div className="px-4 mb-4">
+                        <input
+                            type="text"
+                            className="border p-1 text-sm rounded w-full bg-background text-foreground"
+                            placeholder="Folder Name"
+                            value={newFolderName}
+                            onChange={(e) => setNewFolderName(e.target.value)}
+                            autoFocus
+                        />
+                    </div>
 
-                    <FolderList activeFolderId={activeFolderId} onSelectFolder={(id) => {
-                        onSelectFolder(id);
-                        if (window.innerWidth < 768) setSidebarOpen(false);
-                    }} />
+                    <FolderList
+                        activeFolderId={activeFolderId}
+                        onSelectFolder={(id) => {
+                            onSelectFolder(id);
+                            if (window.innerWidth < 768) setSidebarOpen(false);
+                        }}
+                        onDeleteFolder={handleDeleteFolder}
+                    />
                 </div>
             </aside>
 
