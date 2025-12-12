@@ -12,13 +12,13 @@ const manifestForPlugin: Partial<VitePWAOptions> = {
     categories: ["productivity", "utilities"],
     icons: [
       {
-        src: '/android-chrome-192x192.svg',
+        src: 'android-chrome-192x192.svg',
         sizes: '192x192',
         type: 'image/svg+xml',
         purpose: 'any maskable'
       },
       {
-        src: '/android-chrome-512x512.svg',
+        src: 'android-chrome-512x512.svg',
         sizes: '512x512',
         type: 'image/svg+xml',
         purpose: 'any maskable'
@@ -27,8 +27,8 @@ const manifestForPlugin: Partial<VitePWAOptions> = {
     theme_color: '#171717',
     background_color: '#171717',
     display: "standalone",
-    scope: '/',
-    start_url: "/",
+    scope: './',
+    start_url: "./index.html",
     orientation: 'portrait'
   }
 }
