@@ -17,6 +17,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view' | 'select'>('pen');
     const [noteContent, setNoteContent] = useState('');
     const [elements, setElements] = useState<DrawingElement[]>([]);
+    const [currentFolderId, setCurrentFolderId] = useState<string | null>('root');
 
     // Selection State
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -66,6 +67,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 setTitle(n.title || '');
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
+                setCurrentFolderId(n.folderId || 'root');
             }
         });
     }, [noteId]);
@@ -751,7 +753,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     title: title,
                     content: '',
                     drawings: [],
-                    folderId: 'root', // Explicitly set folderId
+                    folderId: currentFolderId, // Use current folder ID
                     createdAt: Date.now(),
                     updatedAt: Date.now()
                 };
