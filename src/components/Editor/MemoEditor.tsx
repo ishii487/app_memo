@@ -21,6 +21,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [title, setTitle] = useState('');
+    const [elements, setElements] = useState<DrawingElement[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
