@@ -15,18 +15,21 @@ interface MemoEditorProps {
 export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkClick }) => {
     const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view'>('pen');
     const [noteContent, setNoteContent] = useState('');
-    const [elements, setElements] = useState<DrawingElement[]>([]);
     const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
     const [autoShape, setAutoShape] = useState(true);
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [noteContent, setNoteContent] = useState('');
+    const [title, setTitle] = useState('');
+    const [elements, setElements] = useState<DrawingElement[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     useEffect(() => {
         db.notes.get(noteId).then(n => {
             if (n) {
+                setTitle(n.title || '');
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
             }
@@ -35,6 +38,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const saveNote = async () => {
         await db.notes.update(noteId, {
+            title,
             content: noteContent,
             drawings: elements,
             updatedAt: Date.now()
@@ -42,12 +46,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     useEffect(() => {
-        const timer = setInterval(saveNote, 5000);
+        const timer = setInterval(saveNote, 3000); // Auto-save title too
         return () => {
             clearInterval(timer);
             saveNote();
         };
-    }, [noteContent, elements]);
+    }, [noteContent, elements, title]);
 
     // State for gestures
     const activePointers = useRef<Map<number, { x: number; y: number }>>(new Map());

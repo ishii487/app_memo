@@ -86,7 +86,16 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                             onClick={() => onSelectNote(note.id)}
                             className="group flex flex-col p-5 rounded-xl border border-border bg-card hover:border-primary/50 cursor-pointer transition-all shadow-sm hover:shadow-md hover:-translate-y-1 h-48 relative overflow-hidden"
                         >
-                            <h3 className="font-bold text-lg mb-2 line-clamp-2 leading-snug">{note.title || '無題のメモ'}</h3>
+                            <div className="flex justify-between items-start mb-2">
+                                <h3 className="font-bold text-lg line-clamp-2 leading-snug flex-1">{note.title || '無題のメモ'}</h3>
+                                <button
+                                    onClick={(e) => deleteNote(e, note.id)}
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/10 hover:text-destructive rounded transition-all -mr-2 -mt-2"
+                                    title="Delete"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
                             <div className="flex-1 text-sm text-muted-foreground overflow-hidden relative">
                                 <p className="line-clamp-4 leading-relaxed opacity-80">{note.content || '(本文なし)'}</p>
                                 <div className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-card to-transparent" />
