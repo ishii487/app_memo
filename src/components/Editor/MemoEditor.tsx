@@ -180,15 +180,36 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     ctx.lineWidth = 2;
                     ctx.stroke();
                 } else {
-                    // For shapes, maybe a small icon at top-right or center?
-                    // Simple blue bounding box for now or finding center
-                    // Let's use bounding rect logic or just a mark
-                    // Simplified: center dot?
-                    // Better: No visual clutter, just rely on hover in view mode?
-                    // User said "nothing happens". Visual cue is needed.
-                    // Let's draw a blue link symbol top-left of generic shapes
-                    // Approximate bounding box top-left
-                    // ... (Simplification: just ensure text has underline, shapes might be subtle)
+                    // For shapes, draw a blue link icon/marker at the "origin"
+                    let lx = 0, ly = 0;
+                    if (el.type === 'rect' || el.type === 'circle') {
+                        lx = el.params.x;
+                        ly = el.params.y;
+                    } else if (el.type === 'stroke' && el.points.length > 0) {
+                        lx = el.points[0].x;
+                        ly = el.points[0].y;
+                    } else if (el.type === 'line') {
+                        lx = el.params.start.x;
+                        ly = el.params.start.y;
+                    }
+
+                    if (lx && ly) {
+                        // Draw Link Indicator (Blue Circle with L)
+                        ctx.beginPath();
+                        ctx.arc(lx - 10, ly - 10, 8, 0, Math.PI * 2);
+                        ctx.fillStyle = '#2563eb';
+                        ctx.fill();
+                        ctx.fillStyle = 'white';
+                        ctx.font = '10px sans-serif';
+                        ctx.fillText('L', lx - 13, ly - 7);
+
+                        // Also separate stroke to make it visible
+                        ctx.beginPath();
+                        ctx.arc(lx - 10, ly - 10, 8, 0, Math.PI * 2);
+                        ctx.strokeStyle = 'white';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    }
                 }
             }
         });
@@ -781,6 +802,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         alert("Please select an element to link.");
     };
 
+    const handleRename = () => {
+        const newTitle = prompt("Edit Note Title:", title);
+        if (newTitle) setTitle(newTitle);
+    };
+
     const renderContentView = () => {
         const parts = noteContent.split(/(\[\[.*?\]\])/g);
         return parts.map((part, i) => {
@@ -820,6 +846,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             {/* Toolbar (Fixed) */}
             <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
+                <div className="h-6 w-px bg-border mx-2" />
+                {/* Editable Title */}
+                <span onClick={handleRename} className="font-semibold text-sm cursor-pointer hover:bg-muted px-2 py-1 rounded select-none truncate max-w-[150px]" title="Rename Note">
+                    {title || "Untitled"}
+                </span>
                 <div className="h-6 w-px bg-border mx-2" />
                 <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
                 <button onClick={() => setMode('select')} className={cn("p-2 rounded", mode === 'select' && "bg-primary/20 text-primary")} title="Select Mode"><MousePointer2 size={20} /></button>

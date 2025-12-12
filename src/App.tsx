@@ -7,7 +7,10 @@ import { v4 as uuidv4 } from 'uuid'
 
 function App() {
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
-  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  // History stack: last item is current note
+  const [noteHistory, setNoteHistory] = useState<string[]>([]);
+  const activeNoteId = noteHistory.length > 0 ? noteHistory[noteHistory.length - 1] : null;
   const [initStatus, setInitStatus] = useState<string>("Initializing...");
 
   // Initial startup check
@@ -38,29 +41,33 @@ function App() {
   }
 
   const handleLinkClick = async (title: string) => {
-    // Clean title (remove brackets if passed)
     const cleanTitle = title.replace(/^\[\[|\]\]$/g, '');
-
-    // Find existing note
     const existing = await db.notes.where('title').equals(cleanTitle).first();
-    if (existing) {
-      setActiveNoteId(existing.id);
-    } else {
-      // Create new note
-      const confirmCreate = confirm(`Create new note "${cleanTitle}"?`);
-      if (!confirmCreate) return;
 
-      const id = uuidv4();
-      await db.notes.add({
-        id,
-        title: cleanTitle,
-        folderId: activeFolderId, // Create in current folder view
-        content: '',
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      });
-      setActiveNoteId(id);
+    if (existing) {
+      setNoteHistory(prev => [...prev, existing.id]);
+    } else {
+      // Prompt before creating a missing linked note
+      if (confirm(`Linked note "${cleanTitle}" not found. Create it?`)) {
+        const id = uuidv4();
+        await db.notes.add({
+          id,
+          title: cleanTitle,
+          folderId: activeFolderId,
+          content: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+        setNoteHistory(prev => [...prev, id]);
+      }
     }
+  };
+
+  const handleBack = () => {
+    setNoteHistory(prev => {
+      if (prev.length <= 1) return []; // If only 1 left, clear to go back to list
+      return prev.slice(0, -1);
+    });
   };
 
   return (
@@ -68,20 +75,20 @@ function App() {
       activeFolderId={activeFolderId}
       onSelectFolder={(id) => {
         setActiveFolderId(id);
-        setActiveNoteId(null);
+        setNoteHistory([]);
       }}
       title={activeNoteId ? "エディタ" : (activeFolderId ? "フォルダ" : "すべてのメモ")}
     >
       {activeNoteId ? (
         <MemoEditor
           noteId={activeNoteId}
-          onBack={() => setActiveNoteId(null)}
+          onBack={handleBack}
           onLinkClick={handleLinkClick}
         />
       ) : (
         <NoteList
           folderId={activeFolderId}
-          onSelectNote={setActiveNoteId}
+          onSelectNote={(id) => setNoteHistory([id])}
           onSelectFolder={setActiveFolderId}
         />
       )}
