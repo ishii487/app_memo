@@ -75,23 +75,26 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const PAGE_SIZE = { width: 5000, height: 10000 };
 
     // Draw canvas
+    const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+    // 1. Init/Update Buffer when elements change
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        // Create buffer if needed
+        if (!bufferCanvasRef.current) {
+            bufferCanvasRef.current = document.createElement('canvas');
+            bufferCanvasRef.current.width = PAGE_SIZE.width;
+            bufferCanvasRef.current.height = PAGE_SIZE.height;
+        }
+        const buffer = bufferCanvasRef.current;
+        const ctx = buffer.getContext('2d');
         if (!ctx) return;
 
-        // Match canvas bitmap size to the huge page size
-        if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
-            canvas.width = PAGE_SIZE.width;
-            canvas.height = PAGE_SIZE.height;
-        }
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Clear buffer
+        ctx.clearRect(0, 0, buffer.width, buffer.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // Render saved elements
+        // Render saved elements to buffer
         elements.forEach(el => {
             ctx.strokeStyle = el.color;
             ctx.lineWidth = el.width;
@@ -121,7 +124,33 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
         });
 
-        // Draw current stroke from Ref
+        // Force screen update
+        setTick(t => t + 1);
+
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height]);
+
+    // 2. Render Screen (Fast Loop)
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        const buffer = bufferCanvasRef.current;
+        if (!canvas || !buffer) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Ensure visible canvas matches page size (it should already)
+        if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
+            canvas.width = PAGE_SIZE.width;
+            canvas.height = PAGE_SIZE.height;
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // A. Blit the Buffer (O(1) operation)
+        ctx.drawImage(buffer, 0, 0);
+
+        // B. Draw current stroke (Dynamic, usually small)
         const stroke = currentStrokeRef.current;
         if (stroke.length > 0) {
             ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black'; // Eraser still red trace
@@ -137,10 +166,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.stroke();
             ctx.globalAlpha = 1.0;
         }
-    }, [elements, mode, transform, setTick, penWidth, eraserWidth]); // Added width deps
-    // Note: 'transform' dependency is mainly if we need to redraw during expensive transform? 
-    // Actually, transform is CSS-only, BUT currentStrokeRef updates don't trigger this effect automatically
-    // unless 'setTick' is called.
+    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements]);
 
     // Coordinate helper: Screen -> Canvas Local
     const getLocalPoint = (client_x: number, client_y: number) => {
@@ -222,14 +248,32 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             let newScale = initialScale.current * scaleFactor;
             newScale = Math.min(Math.max(newScale, 0.1), 3);
 
+            // Zoom-at-point & Clamping Logic
+            const scaleRatio = newScale / transform.scale;
             const dx = newCenter.x - lastCenter.current.x;
             const dy = newCenter.y - lastCenter.current.y;
 
-            setTransform(t => ({
+            let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
+            let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
+
+            if (containerRef.current) {
+                const cw = containerRef.current.clientWidth;
+                const ch = containerRef.current.clientHeight;
+                const minX = cw - PAGE_SIZE.width * newScale;
+                const minY = ch - PAGE_SIZE.height * newScale;
+
+                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
+                else nextX = Math.max(0, Math.min(nextX, minX));
+
+                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
+                else nextY = Math.max(0, Math.min(nextY, minY));
+            }
+
+            setTransform({
                 scale: newScale,
-                x: t.x + dx,
-                y: t.y + dy
-            }));
+                x: nextX,
+                y: nextY
+            });
             lastCenter.current = newCenter;
             return;
         }
