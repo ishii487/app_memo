@@ -133,6 +133,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     const onPointerDown = (e: React.PointerEvent) => {
+        // Prevent default to stop browser scrolling/refreshing
+        e.preventDefault();
+
         // Track pointer
         activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -158,6 +161,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
+        e.preventDefault(); // Critical for stopping pull-to-refresh
         const prev = activePointers.current.get(e.pointerId);
         if (prev) {
             // Update pointer pos
