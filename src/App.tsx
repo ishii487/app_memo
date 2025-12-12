@@ -11,6 +11,7 @@ function App() {
   // History stack: last item is current note
   const [noteHistory, setNoteHistory] = useState<string[]>([]);
   const activeNoteId = noteHistory.length > 0 ? noteHistory[noteHistory.length - 1] : null;
+  const [activeNoteTitle, setActiveNoteTitle] = useState<string>("");
   const [initStatus, setInitStatus] = useState<string>("Initializing...");
 
   // Initial startup check
@@ -29,7 +30,17 @@ function App() {
       }
     };
     init();
+    init();
   }, []);
+
+  // Fetch title when active note changes
+  useEffect(() => {
+    if (activeNoteId) {
+      db.notes.get(activeNoteId).then(n => {
+        if (n) setActiveNoteTitle(n.title);
+      });
+    }
+  }, [activeNoteId]);
 
   if (initStatus) {
     return (
@@ -68,32 +79,52 @@ function App() {
       if (prev.length <= 1) return []; // If only 1 left, clear to go back to list
       return prev.slice(0, -1);
     });
-  };
+    const handleBack = () => {
+      setNoteHistory(prev => {
+        if (prev.length <= 1) return []; // If only 1 left, clear to go back to list
+        return prev.slice(0, -1);
+      });
+    };
 
-  return (
-    <AppLayout
-      activeFolderId={activeFolderId}
-      onSelectFolder={(id) => {
-        setActiveFolderId(id);
-        setNoteHistory([]);
-      }}
-      title={activeNoteId ? "エディタ" : (activeFolderId ? "フォルダ" : "すべてのメモ")}
-    >
-      {activeNoteId ? (
-        <MemoEditor
-          noteId={activeNoteId}
-          onBack={handleBack}
-          onLinkClick={handleLinkClick}
-        />
-      ) : (
-        <NoteList
-          folderId={activeFolderId}
-          onSelectNote={(id) => setNoteHistory([id])}
-          onSelectFolder={setActiveFolderId}
-        />
-      )}
-    </AppLayout>
-  )
-}
+    const handleRenameTitle = async () => {
+      if (!activeNoteId) return;
+      const newTitle = prompt("Edit Note Title:", activeNoteTitle);
+      if (newTitle && newTitle !== activeNoteTitle) {
+        await db.notes.update(activeNoteId, { title: newTitle, updatedAt: Date.now() });
+        setActiveNoteTitle(newTitle);
+      }
+    };
 
-export default App
+    return (
+      <AppLayout
+        activeFolderId={activeFolderId}
+        onSelectFolder={(id) => {
+          setActiveFolderId(id);
+          setNoteHistory([]);
+        }}
+        onSelectFolder={(id) => {
+          setActiveFolderId(id);
+          setNoteHistory([]);
+        }}
+        title={activeNoteId ? activeNoteTitle : (activeFolderId ? "フォルダ" : "すべてのメモ")}
+        onTitleClick={activeNoteId ? handleRenameTitle : undefined}
+      >
+        {activeNoteId ? (
+          <MemoEditor
+            noteId={activeNoteId}
+            onBack={handleBack}
+            onLinkClick={handleLinkClick}
+            externalTitle={activeNoteTitle}
+          />
+        ) : (
+          <NoteList
+            folderId={activeFolderId}
+            onSelectNote={(id) => setNoteHistory([id])}
+            onSelectFolder={setActiveFolderId}
+          />
+        )}
+      </AppLayout>
+    )
+  }
+
+  export default App

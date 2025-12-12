@@ -8,9 +8,10 @@ interface AppLayoutProps {
     activeFolderId: string | null;
     onSelectFolder: (id: string | null) => void;
     title?: string;
+    onTitleClick?: () => void;
 }
 
-export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, onSelectFolder, title = "Memo App" }) => {
+export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, onSelectFolder, title = "Memo App", onTitleClick }) => {
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     return (
@@ -58,7 +59,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
                     <button onClick={() => setSidebarOpen(true)} className="mr-4 p-2 -ml-2 hover:bg-accent rounded-md">
                         <Menu size={24} />
                     </button>
-                    <h1 className="text-lg font-bold truncate">{title}</h1>
+                    <h1
+                        className={cn("text-lg font-bold truncate flex-1", onTitleClick && "cursor-pointer active:opacity-70")}
+                        onClick={onTitleClick}
+                    >
+                        {title}
+                    </h1>
+                    {onTitleClick && <span className="text-xs text-muted-foreground ml-2 border px-2 py-0.5 rounded">Rename</span>}
                 </header>
 
                 <div className="flex-1 overflow-hidden relative">

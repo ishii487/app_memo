@@ -13,7 +13,14 @@ interface MemoEditorProps {
     onLinkClick: (title: string) => void;
 }
 
-export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkClick }) => {
+interface MemoEditorProps {
+    noteId: string;
+    onBack: () => void;
+    onLinkClick: (title: string) => void;
+    externalTitle?: string;
+}
+
+export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkClick, externalTitle }) => {
     const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view' | 'select'>('pen');
     const [noteContent, setNoteContent] = useState('');
     const [elements, setElements] = useState<DrawingElement[]>([]);
@@ -72,6 +79,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         });
     }, [noteId]);
 
+
+    useEffect(() => {
+        if (externalTitle && externalTitle !== title) {
+            setTitle(externalTitle);
+        }
+    }, [externalTitle]);
 
     const saveNote = async () => {
         await db.notes.update(noteId, {
@@ -802,10 +815,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         alert("Please select an element to link.");
     };
 
-    const handleRename = () => {
-        const newTitle = prompt("Edit Note Title:", title);
-        if (newTitle) setTitle(newTitle);
-    };
+
 
     const renderContentView = () => {
         const parts = noteContent.split(/(\[\[.*?\]\])/g);
@@ -846,11 +856,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             {/* Toolbar (Fixed) */}
             <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
-                <div className="h-6 w-px bg-border mx-2" />
-                {/* Editable Title */}
-                <span onClick={handleRename} className="font-semibold text-sm cursor-pointer hover:bg-muted px-2 py-1 rounded select-none truncate max-w-[150px]" title="Rename Note">
-                    {title || "Untitled"}
-                </span>
                 <div className="h-6 w-px bg-border mx-2" />
                 <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
                 <button onClick={() => setMode('select')} className={cn("p-2 rounded", mode === 'select' && "bg-primary/20 text-primary")} title="Select Mode"><MousePointer2 size={20} /></button>
