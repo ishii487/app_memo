@@ -3,7 +3,7 @@ import { db } from '../../db/db';
 import { recognizeShape, type DrawingElement, type Point } from '../../utils/geometry';
 import { recognizeTextFromCanvas } from '../../utils/ocr';
 import { v4 as uuidv4 } from 'uuid';
-import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon } from 'lucide-react';
+import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface MemoEditorProps {
@@ -13,9 +13,10 @@ interface MemoEditorProps {
 }
 
 export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkClick }) => {
-    const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view'>('pen');
+    const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view' | 'select'>('pen');
     const [noteContent, setNoteContent] = useState('');
     const [elements, setElements] = useState<DrawingElement[]>([]);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
     const [autoShape, setAutoShape] = useState(true);
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [title, setTitle] = useState('');
@@ -35,6 +36,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     // Drawing ref (for immediate updates without render lag)
     const currentStrokeRef = useRef<Point[]>([]);
+
+    // Selection Moving State
+    const isDraggingSelection = useRef(false);
+    const lastDragPos = useRef<{ x: number, y: number } | null>(null);
+
     // Force render helper
     const [, setTick] = useState(0);
 
@@ -121,8 +127,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         // Render saved elements to buffer
         elements.forEach(el => {
-            ctx.strokeStyle = el.color;
-            ctx.lineWidth = el.width;
+            ctx.strokeStyle = el.id === selectedId ? '#3b82f6' : el.color; // Highlight selected
+            ctx.lineWidth = el.id === selectedId ? (el.width + 2) : el.width;
+            if (el.id === selectedId) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
+            ctx.shadowColor = '#3b82f6';
 
             if (el.type === 'stroke') {
                 drawSmoothStroke(ctx, el.points);
@@ -142,11 +150,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 ctx.strokeRect(x, y, width, height);
             }
         });
+        ctx.shadowBlur = 0; // Reset
 
         // Force screen update
         setTick(t => t + 1);
 
-    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height]);
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedId]);
 
     // 2. Render Screen (Fast Loop)
     useEffect(() => {
@@ -218,6 +227,71 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     };
 
+    // Helper functions for Hit Testing need to be hoisted or accessible here
+    const distanceToSegment = (p: Point, v: Point, w: Point) => {
+        const l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
+        if (l2 === 0) return Math.sqrt(Math.pow(p.x - v.x, 2) + Math.pow(p.y - v.y, 2));
+        let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        return Math.sqrt(Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2));
+    };
+
+    const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
+        const t = threshold + el.width / 2;
+
+        if (el.type === 'stroke') {
+            // Check bounding box first
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const p of el.points) {
+                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            }
+            if (point.x < minX - t || point.x > maxX + t || point.y < minY - t || point.y > maxY + t) return false;
+
+            for (let i = 0; i < el.points.length - 1; i++) {
+                if (distanceToSegment(point, el.points[i], el.points[i + 1]) < t) return true;
+            }
+            return false;
+        }
+
+        if (el.type === 'line') {
+            const { start, end } = el.params;
+            return distanceToSegment(point, start, end) < t;
+        }
+
+        if (el.type === 'circle') {
+            const { x, y, radius } = el.params;
+            const d = Math.sqrt(Math.pow(point.x - x, 2) + Math.pow(point.y - y, 2));
+            return Math.abs(d - radius) < t;
+        }
+
+        if (el.type === 'rect') {
+            const { x, y, width, height } = el.params;
+            // Check 4 sides
+            const p1 = { x, y };
+            const p2 = { x: x + width, y };
+            const p3 = { x: x + width, y: y + height };
+            const p4 = { x, y: y + height };
+
+            return distanceToSegment(point, p1, p2) < t ||
+                distanceToSegment(point, p2, p3) < t ||
+                distanceToSegment(point, p3, p4) < t ||
+                distanceToSegment(point, p4, p1) < t;
+        }
+
+        return false;
+    };
+
+    const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
+        // Optimization: Skip checking every single point of the eraser stroke
+        // Check every 3rd point for performance
+        for (let i = 0; i < stroke.length; i += 3) {
+            if (isPointNearElement(stroke[i], el, threshold)) return true;
+        }
+        return false;
+    };
+
+
     const onPointerDown = (e: React.PointerEvent) => {
         e.preventDefault(); // Stop default touch actions
         e.stopPropagation();
@@ -229,6 +303,36 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         // Pen priority: If Pen is down, we draw. Ignore multi-touch palm.
         const hasPen = pointers.some(p => p.type === 'pen');
+
+        // Selection Logic
+        if (mode === 'select' && pointers.length === 1) {
+            isPanning.current = false;
+            const pt = getLocalPoint(e.clientX, e.clientY);
+
+            // Hit Test (Reverse to pick top-most)
+            let foundId: string | null = null;
+            for (let i = elements.length - 1; i >= 0; i--) {
+                if (isPointNearElement(pt, elements[i], 10)) {
+                    foundId = elements[i].id;
+                    break;
+                }
+            }
+
+            if (foundId) {
+                setSelectedId(foundId);
+                isDraggingSelection.current = true;
+                lastDragPos.current = pt;
+            } else {
+                setSelectedId(null); // Deselect
+                // Maybe start panning if click on empty space?
+                isPanning.current = true;
+                initialPinchDist.current = 0; // Reset
+                lastCenter.current = pt; // For pan start? Simplified for 1 finger pan in select mode maybe?
+                // Actually let's stick to 2-finger pan standard, or 1-finger pan if nothing selected?
+                // For now, if nothing selected, do nothing or start pan.
+            }
+            return;
+        }
 
         if (hasPen && e.pointerType === 'pen') {
             // Start Drawing with Pen
@@ -260,6 +364,22 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     };
 
+    const updateElementPosition = (el: DrawingElement, dx: number, dy: number): DrawingElement => {
+        if (el.type === 'stroke') {
+            return { ...el, points: el.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+        } else if (el.type === 'line') {
+            const { start, end } = el.params;
+            return { ...el, params: { ...el.params, start: { x: start.x + dx, y: start.y + dy }, end: { x: end.x + dx, y: end.y + dy } } };
+        } else if (el.type === 'circle') {
+            const { x, y } = el.params;
+            return { ...el, params: { ...el.params, x: x + dx, y: y + dy } };
+        } else if (el.type === 'rect') {
+            const { x, y } = el.params;
+            return { ...el, params: { ...el.params, x: x + dx, y: y + dy } };
+        }
+        return el;
+    };
+
     const onPointerMove = (e: React.PointerEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -269,6 +389,24 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         const pointers = Array.from(activePointers.current.values());
         const hasPen = pointers.some(p => p.type === 'pen');
+
+        // Selection Drag Move
+        if (mode === 'select' && isDraggingSelection.current && selectedId && lastDragPos.current) {
+            const pt = getLocalPoint(e.clientX, e.clientY);
+            const dx = pt.x - lastDragPos.current.x;
+            const dy = pt.y - lastDragPos.current.y;
+
+            // Update element position directly
+            setElements(prev => prev.map(el => {
+                if (el.id === selectedId) {
+                    return updateElementPosition(el, dx, dy);
+                }
+                return el;
+            }));
+
+            lastDragPos.current = pt;
+            return;
+        }
 
         if (isPanning.current && pointers.length === 2 && lastCenter.current) {
             // Handle Zoom & Pan
@@ -331,16 +469,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
                         if (mode === 'eraser') ctx.globalAlpha = 0.5;
 
-
-                        // Optimization: just draw the line segment if it's eraser (eraser is simple)
-                        // But for pen, we might want smoothness... actually standard lineTo is fine for live drawing if points are close.
-                        // But user complained about jaggedness. 
-                        // Let's keep lineTo for instant feedback, but maybe the "jaggedness" is because points are sparse?
-                        // If we use bezier, we need 3 points.
-                        // Let's stick to simple lineTo for LIVE feedback to keep it fast, 
-                        // the smoothness comes from the Buffer loop which uses quadraticCurveTo.
-                        // OR, we can try to be smooth here too.
-
                         ctx.beginPath();
                         ctx.moveTo(last.x, last.y);
                         ctx.lineTo(pt.x, pt.y);
@@ -356,6 +484,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         activePointers.current.delete(e.pointerId);
         e.currentTarget.releasePointerCapture(e.pointerId);
 
+        isDraggingSelection.current = false;
+        lastDragPos.current = null;
+
         if (activePointers.current.size < 2) {
             isPanning.current = false;
             lastCenter.current = null;
@@ -366,72 +497,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 commitStroke();
             }
         }
-    };
-
-    // ... (refs)
-
-    // Geometry Helpers for Hit Testing
-    const distanceToSegment = (p: Point, v: Point, w: Point) => {
-        const l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
-        if (l2 === 0) return Math.sqrt(Math.pow(p.x - v.x, 2) + Math.pow(p.y - v.y, 2));
-        let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
-        t = Math.max(0, Math.min(1, t));
-        return Math.sqrt(Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2));
-    };
-
-    const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
-        const t = threshold + el.width / 2;
-
-        if (el.type === 'stroke') {
-            // Check bounding box first
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            for (const p of el.points) {
-                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-            }
-            if (point.x < minX - t || point.x > maxX + t || point.y < minY - t || point.y > maxY + t) return false;
-
-            for (let i = 0; i < el.points.length - 1; i++) {
-                if (distanceToSegment(point, el.points[i], el.points[i + 1]) < t) return true;
-            }
-            return false;
-        }
-
-        if (el.type === 'line') {
-            const { start, end } = el.params;
-            return distanceToSegment(point, start, end) < t;
-        }
-
-        if (el.type === 'circle') {
-            const { x, y, radius } = el.params;
-            const d = Math.sqrt(Math.pow(point.x - x, 2) + Math.pow(point.y - y, 2));
-            return Math.abs(d - radius) < t;
-        }
-
-        if (el.type === 'rect') {
-            const { x, y, width, height } = el.params;
-            // Check 4 sides
-            const p1 = { x, y };
-            const p2 = { x: x + width, y };
-            const p3 = { x: x + width, y: y + height };
-            const p4 = { x, y: y + height };
-
-            return distanceToSegment(point, p1, p2) < t ||
-                distanceToSegment(point, p2, p3) < t ||
-                distanceToSegment(point, p3, p4) < t ||
-                distanceToSegment(point, p4, p1) < t;
-        }
-
-        return false;
-    };
-
-    const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
-        // Optimization: Skip checking every single point of the eraser stroke
-        // Check every 3rd point for performance
-        for (let i = 0; i < stroke.length; i += 3) {
-            if (isPointNearElement(stroke[i], el, threshold)) return true;
-        }
-        return false;
     };
 
     const commitStroke = () => {
@@ -551,6 +616,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
                 <div className="h-6 w-px bg-border mx-2" />
                 <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
+                <button onClick={() => setMode('select')} className={cn("p-2 rounded", mode === 'select' && "bg-primary/20 text-primary")} title="Select Mode"><MousePointer2 size={20} /></button>
                 <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
                 <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
                 <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
