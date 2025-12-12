@@ -20,6 +20,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [title, setTitle] = useState('');
 
+    // New state for widths (Must be declared before use)
+    const [penWidth, setPenWidth] = useState(3);
+    const [eraserWidth, setEraserWidth] = useState(20);
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const containerRef = useRef<HTMLDivElement>(null);
@@ -66,7 +70,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     }, [noteContent, elements, title]);
 
     // Constant for the infinite-ish canvas size
-    const PAGE_SIZE = { width: 2000, height: 4000 };
+    const PAGE_SIZE = { width: 20000, height: 20000 };
 
     // Draw canvas
     useEffect(() => {
@@ -276,9 +280,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     };
 
-    const [penWidth, setPenWidth] = useState(3);
-    const [eraserWidth, setEraserWidth] = useState(20);
-
     // ... (refs)
 
     // Helper to check if a point is close to a segment
@@ -421,6 +422,22 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
                 <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
                 <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
+
+                {/* Width Slider (Only for Pen/Eraser) */}
+                {(mode === 'pen' || mode === 'eraser') && (
+                    <div className="flex items-center gap-2 ml-2 bg-white/50 p-1 rounded border">
+                        <div className={cn("w-2 h-2 rounded-full bg-black", mode === 'eraser' && "bg-red-500")}
+                            style={{ width: mode === 'pen' ? penWidth : eraserWidth / 3, height: mode === 'pen' ? penWidth : eraserWidth / 3 }} />
+                        <input
+                            type="range"
+                            min={mode === 'pen' ? "1" : "5"}
+                            max={mode === 'pen' ? "20" : "50"}
+                            value={mode === 'pen' ? penWidth : eraserWidth}
+                            onChange={e => mode === 'pen' ? setPenWidth(Number(e.target.value)) : setEraserWidth(Number(e.target.value))}
+                            className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                    </div>
+                )}
                 <div className="h-6 w-px bg-border mx-2" />
                 <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
                     <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
