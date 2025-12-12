@@ -83,6 +83,25 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     // Draw canvas
     const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+    // Helper to draw smooth curves
+    const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+
+        // Quadratic Bezier Smoothing
+        for (let i = 1; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const midX = (p1.x + p2.x) / 2;
+            const midY = (p1.y + p2.y) / 2;
+            ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+        }
+        // Last segment
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        ctx.stroke();
+    };
+
     // 1. Init/Update Buffer when elements change
     useEffect(() => {
         // Create buffer if needed
@@ -106,13 +125,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.lineWidth = el.width;
 
             if (el.type === 'stroke') {
-                if (el.points.length < 2) return;
-                ctx.beginPath();
-                ctx.moveTo(el.points[0].x, el.points[0].y);
-                for (let i = 1; i < el.points.length; i++) {
-                    ctx.lineTo(el.points[i].x, el.points[i].y);
-                }
-                ctx.stroke();
+                drawSmoothStroke(ctx, el.points);
             } else if (el.type === 'line') {
                 const { start, end } = el.params;
                 ctx.beginPath();
@@ -164,12 +177,24 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             // Opacity for eraser trace to make it look like a "selection"
             if (mode === 'eraser') ctx.globalAlpha = 0.5;
 
-            ctx.beginPath();
-            ctx.moveTo(stroke[0].x, stroke[0].y);
-            for (let i = 1; i < stroke.length; i++) {
-                ctx.lineTo(stroke[i].x, stroke[i].y);
+            // Inline smoothing for current stroke
+            if (stroke.length < 2) {
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                for (let i = 1; i < stroke.length - 1; i++) {
+                    const p1 = stroke[i];
+                    const p2 = stroke[i + 1];
+                    const midX = (p1.x + p2.x) / 2;
+                    const midY = (p1.y + p2.y) / 2;
+                    ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+                }
+                ctx.lineTo(stroke[stroke.length - 1].x, stroke[stroke.length - 1].y);
+                ctx.stroke();
             }
-            ctx.stroke();
             ctx.globalAlpha = 1.0;
         }
     }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements]);
@@ -305,6 +330,17 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
                         ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
                         if (mode === 'eraser') ctx.globalAlpha = 0.5;
+
+
+                        // Optimization: just draw the line segment if it's eraser (eraser is simple)
+                        // But for pen, we might want smoothness... actually standard lineTo is fine for live drawing if points are close.
+                        // But user complained about jaggedness. 
+                        // Let's keep lineTo for instant feedback, but maybe the "jaggedness" is because points are sparse?
+                        // If we use bezier, we need 3 points.
+                        // Let's stick to simple lineTo for LIVE feedback to keep it fast, 
+                        // the smoothness comes from the Buffer loop which uses quadraticCurveTo.
+                        // OR, we can try to be smooth here too.
+
                         ctx.beginPath();
                         ctx.moveTo(last.x, last.y);
                         ctx.lineTo(pt.x, pt.y);
