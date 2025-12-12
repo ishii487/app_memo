@@ -5,13 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npx @tailwindcss/cli -i src/index.css -o public/tailwind.css && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/cli": "^4.0.0",
-    "@tailwindcss/vite": "^4.0.0",
     "autoprefixer": "^10.4.19",
     "clsx": "^2.1.1",
     "dexie": "^4.2.1",
