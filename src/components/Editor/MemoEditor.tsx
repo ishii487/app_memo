@@ -42,12 +42,18 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const initialScale = useRef<number>(1);
     const lastCenter = useRef<{ x: number, y: number } | null>(null);
 
+    const [showUpdateMessage, setShowUpdateMessage] = useState(false);
+
     useEffect(() => {
         db.notes.get(noteId).then(n => {
             if (n) {
                 setTitle(n.title || '');
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
+
+                // Show "Update Complete" message
+                setShowUpdateMessage(true);
+                setTimeout(() => setShowUpdateMessage(false), 3000);
             }
         });
     }, [noteId]);
@@ -460,6 +466,13 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     return (
         <div className="flex flex-col h-full bg-white relative overflow-hidden">
+            {/* Update Toast */}
+            {showUpdateMessage && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg z-[100] animate-in fade-in slide-in-from-top-4 duration-300 font-bold text-sm pointer-events-none">
+                    更新完了
+                </div>
+            )}
+
             {/* Toolbar (Fixed) */}
             <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
