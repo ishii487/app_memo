@@ -24,8 +24,8 @@ const db = new Dexie('MemoAppDB') as Dexie & {
 
 // Schema registration
 db.version(2).stores({
-    folders: '++id, &id, name, createdAt, updatedAt', // &id for unique primary key (uuid)
-    notes: '++id, &id, title, folderId, createdAt, updatedAt'
+    folders: 'id, name, parentId, createdAt, updatedAt',
+    notes: 'id, title, folderId, createdAt, updatedAt'
 });
 
 export { db };
