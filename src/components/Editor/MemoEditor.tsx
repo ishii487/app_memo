@@ -118,16 +118,20 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         // Draw current stroke from Ref
         const stroke = currentStrokeRef.current;
         if (stroke.length > 0) {
-            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-            ctx.lineWidth = mode === 'eraser' ? 10 : 2;
+            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black'; // Eraser still red trace
+            ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+            // Opacity for eraser trace to make it look like a "selection"
+            if (mode === 'eraser') ctx.globalAlpha = 0.5;
+
             ctx.beginPath();
             ctx.moveTo(stroke[0].x, stroke[0].y);
             for (let i = 1; i < stroke.length; i++) {
                 ctx.lineTo(stroke[i].x, stroke[i].y);
             }
             ctx.stroke();
+            ctx.globalAlpha = 1.0;
         }
-    }, [elements, mode, transform, setTick]);
+    }, [elements, mode, transform, setTick, penWidth, eraserWidth]); // Added width deps
     // Note: 'transform' dependency is mainly if we need to redraw during expensive transform? 
     // Actually, transform is CSS-only, BUT currentStrokeRef updates don't trigger this effect automatically
     // unless 'setTick' is called.
@@ -243,11 +247,13 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     const ctx = canvas?.getContext('2d');
                     if (ctx) {
                         ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-                        ctx.lineWidth = mode === 'eraser' ? 10 : 2;
+                        ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+                        if (mode === 'eraser') ctx.globalAlpha = 0.5;
                         ctx.beginPath();
                         ctx.moveTo(last.x, last.y);
                         ctx.lineTo(pt.x, pt.y);
                         ctx.stroke();
+                        if (mode === 'eraser') ctx.globalAlpha = 1.0;
                     }
                 }
             }
@@ -270,11 +276,56 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     };
 
+    const [penWidth, setPenWidth] = useState(3);
+    const [eraserWidth, setEraserWidth] = useState(20);
+
+    // ... (refs)
+
+    // Helper to check if a point is close to a segment
+    // Simplified: Check if point is close to any point in the stroke
+    const isPointNearStroke = (point: Point, stroke: Point[], threshold: number) => {
+        // Fast bounding box check
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of stroke) {
+            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        }
+        if (point.x < minX - threshold || point.x > maxX + threshold ||
+            point.y < minY - threshold || point.y > maxY + threshold) return false;
+
+        // Detailed check
+        for (const p of stroke) {
+            const d = Math.sqrt(Math.pow(point.x - p.x, 2) + Math.pow(point.y - p.y, 2));
+            if (d < threshold) return true;
+        }
+        return false;
+    };
+
+    const isStrokeNearStroke = (stroke1: Point[], stroke2: Point[], threshold: number) => {
+        // Check if any point in stroke1 is near stroke2
+        // Optimization: Check only a subset of points or bounding boxes
+        for (let i = 0; i < stroke1.length; i += 2) { // Skip some points for speed
+            if (isPointNearStroke(stroke1[i], stroke2, threshold)) return true;
+        }
+        return false;
+    };
+
     const commitStroke = () => {
         const stroke = currentStrokeRef.current;
         if (stroke.length === 0) return;
 
         if (mode === 'eraser') {
+            // Object Eraser Logic
+            const threshold = eraserWidth / 2;
+            setElements(prev => prev.filter(el => {
+                if (el.type !== 'stroke') return true; // TODO: Support erasing shapes
+                // Check intersection
+                if (isStrokeNearStroke(stroke, el.points, threshold + (el.width || 2) / 2)) {
+                    return false; // Remove element
+                }
+                return true;
+            }));
+
             currentStrokeRef.current = [];
             setTick(t => t + 1);
             return;
@@ -284,7 +335,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             type: 'stroke',
             points: stroke,
             color: 'black',
-            width: 2,
+            width: penWidth,
             id: uuidv4(),
             // @ts-ignore
             params: {}
