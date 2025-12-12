@@ -338,7 +338,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             <div className="flex-1 relative overflow-hidden bg-white" ref={containerRef}>
                 <div
                     className={cn(
-                        "absolute inset-0 w-full h-full p-6 z-10 overflow-auto whitespace-pre-wrap leading-loose text-lg font-mono",
+                        "absolute inset-0 w-full h-full p-6 z-10 overflow-auto whitespace-pre-wrap leading-loose text-lg font-mono text-black",
                         mode === 'text' && "hidden"
                     )}
                 >
@@ -348,7 +348,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <textarea
                     ref={textareaRef}
                     className={cn(
-                        "absolute inset-0 w-full h-full p-6 bg-transparent z-10 resize-none outline-none leading-loose text-lg font-mono",
+                        "absolute inset-0 w-full h-full p-6 bg-transparent z-10 resize-none outline-none leading-loose text-lg font-mono text-black",
                         mode !== 'text' && "hidden"
                     )}
                     value={noteContent}
