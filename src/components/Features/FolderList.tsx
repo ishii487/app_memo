@@ -27,8 +27,12 @@ export const FolderList: React.FC<FolderListProps> = ({ activeFolderId, onSelect
 
     const deleteFolder = async (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
-        if (confirm("このフォルダを削除しますか？")) {
-            await db.folders.delete(id);
+        if (confirm("このフォルダと中のメモを全て削除しますか？")) {
+            await db.transaction('rw', db.folders, db.notes, async () => {
+                await db.notes.where('folderId').equals(id).delete();
+                await db.folders.delete(id);
+            });
+            if (activeFolderId === id) onSelectFolder(null);
         }
     };
 
