@@ -27,12 +27,21 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         , [folderId]
     );
 
+    // Folder Info: Fetch current folder if we are inside one
+    const currentFolder = useLiveQuery(
+        () => folderId ? db.folders.get(folderId) : Promise.resolve(null),
+        [folderId]
+    );
+
     const createNote = async () => {
+        const titleInput = prompt("新規メモのタイトルを入力してください:", "無題のメモ");
+        if (titleInput === null) return; // Cancelled
+
         const id = uuidv4();
         await db.notes.add({
             id,
             folderId,
-            title: '無題のメモ',
+            title: titleInput || '無題のメモ',
             content: '',
             createdAt: Date.now(),
             updatedAt: Date.now()
@@ -50,6 +59,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     if (!notes || !subFolders) return <div className="p-8 text-center text-muted-foreground">読み込み中...</div>;
 
     const isEmpty = notes.length === 0 && subFolders.length === 0;
+    const headerTitle = folderId ? (currentFolder?.title || 'フォルダ') : 'ホーム';
 
     if (isEmpty) {
         return (
@@ -66,7 +76,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     return (
         <div className="h-full flex flex-col w-full max-w-5xl mx-auto">
             <div className="p-4 pt-6 pb-2 px-6 flex justify-between items-center sticky top-0 bg-background/95 backdrop-blur z-10">
-                <h2 className="font-bold text-2xl tracking-tight">{folderId ? 'メモ' : 'ホーム'}</h2>
+                <h2 className="font-bold text-2xl tracking-tight">{headerTitle}</h2>
                 <button onClick={createNote} className="p-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:bg-primary/90 transition-transform active:scale-95" aria-label="Create Note">
                     <Plus size={24} />
                 </button>
