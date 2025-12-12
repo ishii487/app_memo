@@ -304,7 +304,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         if (el.type === 'text') {
-            const _ = threshold; // Unused
+            // Unused var removed
             // Rough bounding box for hit test
             // Assume width based on char count * fontSize * 0.6
             const w = el.content.length * el.fontSize * 0.6;
@@ -680,7 +680,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         try {
             const text = await recognizeTextFromCanvas(canvasRef.current);
             if (text) {
-                if (confirm(`Convert handwriting to text ?\n\n"${text}"`)) {
+                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
                     setNoteContent(prev => prev + (prev ? '\n' : '') + text);
                     setElements([]);
                     setMode('text');
@@ -774,12 +774,39 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         />
                     </div>
                 )}
+
+                {/* Font Size for Text Mode */}
+                {mode === 'text' && (
+                    <div className="flex items-center gap-1 ml-2 bg-white/50 p-1 rounded border">
+                        <Type size={14} className="text-gray-500" />
+                        <input
+                            type="number"
+                            min="10"
+                            max="100"
+                            value={fontSize}
+                            onChange={e => setFontSize(Number(e.target.value))}
+                            className="w-12 h-6 text-sm border rounded px-1"
+                        />
+                    </div>
+                )}
+
                 {/* Delete Button for Selection */}
                 {selectedIds.size > 0 && mode === 'select' && (
                     <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
                 )}
 
                 <div className="flex-1" />
+
+                {/* Shape Checkbox */}
+                <label className="flex items-center gap-1 text-xs select-none cursor-pointer mr-2 px-2 hover:bg-muted py-1 rounded">
+                    <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
+                    <span>Shape</span>
+                </label>
+
+                {/* Extra Tools */}
+                <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
+                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
+
                 <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
             </div>
