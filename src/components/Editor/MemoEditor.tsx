@@ -97,6 +97,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         };
     }, [noteContent, elements, title]);
 
+    useEffect(() => {
+        if (mode !== 'select') {
+            setSelectedIds(new Set());
+        }
+    }, [mode]);
+
     const PAGE_SIZE = { width: 2000, height: 4000 };
 
     // Draw canvas
