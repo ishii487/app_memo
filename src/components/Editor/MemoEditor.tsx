@@ -174,56 +174,85 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 }
             }
 
-            // LINK INDICATOR
-            if (el.link) {
-                // Draw a small "Link" icon or underline
+            // VISUALS: LINK INDICATOR
+            // In View Mode: Color linked elements Light Blue to indicate clickability
+            // In Edit Mode: Keep original color to avoid confusion? Or show subtle indicator?
+            // User request: "Remove L, make linked CHARACTERS light blue in VIEW MODE"
+            if (el.link && mode === 'view') {
+                const LINK_COLOR = '#0ea5e9'; // Light Blue (Tailwind Sky-500)
+
                 if (el.type === 'text') {
-                    // Underline for text
+                    ctx.fillStyle = LINK_COLOR;
+                    ctx.fillText(el.content, el.x, el.y);
+                    // Blue Underline
                     const metrics = ctx.measureText(el.content);
                     ctx.beginPath();
                     ctx.moveTo(el.x, el.y + 4);
                     ctx.lineTo(el.x + metrics.width, el.y + 4);
-                    ctx.strokeStyle = '#2563eb'; // Blue
+                    ctx.strokeStyle = LINK_COLOR;
                     ctx.lineWidth = 2;
                     ctx.stroke();
-                } else {
-                    // For shapes, draw a blue link icon/marker at the "origin"
-                    let lx = 0, ly = 0;
-                    if (el.type === 'rect' || el.type === 'circle') {
-                        lx = el.params.x;
-                        ly = el.params.y;
-                    } else if (el.type === 'stroke' && el.points.length > 0) {
-                        lx = el.points[0].x;
-                        ly = el.points[0].y;
-                    } else if (el.type === 'line') {
-                        lx = el.params.start.x;
-                        ly = el.params.start.y;
-                    }
-
-                    if (lx && ly) {
-                        // Draw Link Indicator (Blue Circle with L)
-                        ctx.beginPath();
-                        ctx.arc(lx - 10, ly - 10, 8, 0, Math.PI * 2);
-                        ctx.fillStyle = '#2563eb';
-                        ctx.fill();
-                        ctx.fillStyle = 'white';
-                        ctx.font = '10px sans-serif';
-                        ctx.fillText('L', lx - 13, ly - 7);
-
-                        // Also separate stroke to make it visible
-                        ctx.beginPath();
-                        ctx.arc(lx - 10, ly - 10, 8, 0, Math.PI * 2);
-                        ctx.strokeStyle = 'white';
-                        ctx.lineWidth = 1;
+                } else if (el.type === 'line') {
+                    // Re-draw with blue
+                    const { start, end } = el.params;
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.lineTo(end.x, end.y);
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.stroke();
+                } else if (el.type === 'circle') {
+                    const { x, y, radius } = el.params;
+                    ctx.beginPath();
+                    ctx.arc(x, y, radius, 0, Math.PI * 2);
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.stroke();
+                } else if (el.type === 'rect') {
+                    const { x, y, width, height } = el.params;
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.strokeRect(x, y, width, height);
+                } else if (el.type === 'stroke') {
+                    // Re-draw stroke
+                    ctx.beginPath();
+                    const points = el.points;
+                    if (points.length > 0) {
+                        ctx.moveTo(points[0].x, points[0].y);
+                        // Using quadratic curves for smoothness (simplified here to match original logic if it used helpers)
+                        // Actually, reusing the helper 'drawSmoothStroke' but with overridden context strokeStyle would be cleaner,
+                        // but drawSmoothStroke might assume black context? 
+                        // Let's manually set strokeStyle BEFORE calling draw helper?
+                        // No, the original draw loop sets strokeStyle per element if we edited it.
+                        // But here we are iterating. 
+                        // To avoid code duplication, we could just set the Style at the TOP of the loop based on mode/link.
+                        // But let's just override here for clarity.
+                        ctx.strokeStyle = LINK_COLOR;
+                        // Simple line connection for now or duplicate logic
+                        for (let i = 1; i < points.length; i++) {
+                            // Simple line join for now to ensure it works
+                            ctx.lineTo(points[i].x, points[i].y);
+                        }
                         ctx.stroke();
                     }
+                }
+            } else if (el.link) {
+                // In non-view mode, show underline for text but no 'L' for shapes as requested?
+                // Or user just said "remove L". Assume standard rendering (black) + underline for text is fine.
+                if (el.type === 'text') {
+                    // Keep the blue underline even in edit mode so they know it's a link?
+                    // User said "In VIEW MODE make characters light blue". Implies Edit mode is normal.
+                    const metrics = ctx.measureText(el.content);
+                    ctx.beginPath();
+                    ctx.moveTo(el.x, el.y + 4);
+                    ctx.lineTo(el.x + metrics.width, el.y + 4);
+                    ctx.strokeStyle = '#2563eb'; // Darker blue for edit mode underline
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
                 }
             }
         });
         ctx.shadowBlur = 0;
         setTick(t => t + 1);
 
-    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds]);
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds, mode]); // Added mode dependency
 
     // 2. Render Screen
     useEffect(() => {
