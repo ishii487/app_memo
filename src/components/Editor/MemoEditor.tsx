@@ -20,9 +20,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [noteContent, setNoteContent] = useState('');
     const [title, setTitle] = useState('');
-    const [elements, setElements] = useState<DrawingElement[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
-import { Plus, Folder as FolderIcon } from 'lucide-react';
+import { Plus, Folder as FolderIcon, Trash2 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '../../lib/utils';
 
@@ -39,6 +39,13 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
             updatedAt: Date.now()
         });
         onSelectNote(id);
+    };
+
+    const deleteNote = async (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        if (confirm("このメモを削除しますか？")) {
+            await db.notes.delete(id);
+        }
     };
 
     if (!notes || !subFolders) return <div className="p-8 text-center text-muted-foreground">読み込み中...</div>;
