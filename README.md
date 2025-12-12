@@ -1,36 +1,47 @@
-# React + TypeScript + Vite
+# オフライン手書きメモアプリ (Offline Memo App)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+オフラインで動作し、手書きとテキストを混在させて記録できる高機能メモアプリです。
+Android端末などでのPWA（アプリとしてのインストール）に対応しています。
 
-Currently, two official plugins are available:
+## ✨ 特徴
+- **完全オフライン対応**: 電波がない場所でも閲覧・編集が可能。
+- **手書き & テキスト**: ペンで自由に書き込み、キーボードでテキスト入力も可能。
+- **図形補正**: 手書きの四角や丸を綺麗に自動整形。
+- **OCR (文字認識)**: 手書き文字をテキストデータに変換。
+- **リンク機能**: メモ同士をリンクで繋げ、ナレッジベースのように使えます。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 📖 使い方 (User Guide)
 
-## React Compiler
+### 基本操作
+1. **メモの作成**: 左サイドバー（スマホではメニューボタン）からフォルダを選び、「＋」ボタンで新規メモを作成。
+2. **モード切替**: エディタ上部のアイコンでモードを切り替えます。
+   - 👁️ **View Mode (閲覧)**: リンクをタップして移動できます。編集不可。
+   - ⌨️ **Text Mode (テキスト)**: キーボードで文字を入力します。
+   - 🖊️ **Pen Mode (ペン)**: 指やスタイラスで手書きします（**1本指で描画、2本指でスクロール**）。
+   - 🧹 **Eraser Mode (消しゴム)**: 手書き線を消します。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 便利な機能
+- **図形補正 (Shape Checkbox)**: 
+  - 上部の「Shape」にチェックを入れた状態で、「四角」や「丸」を一筆書きすると、自動的に綺麗な図形に変換されます。
+- **手書き文字認識 (OCR)**:
+  - 「OCRアイコン（[T]のようなマーク）」を押すと、キャンバス内の手書き文字を読み取り、テキストとして末尾に追加します。
+- **リンク (Wiki機能)**:
+  - Text Modeで文字を選択し、「Link」ボタンを押すと `[[タイトル]]` という形式になります。
+  - View Modeでこれをタップすると、そのタイトルのメモへジャンプ（なければ新規作成）します。
 
-## Expanding the ESLint configuration
+### インストール方法 (Android)
+1. Chromeでアプリを開く。
+2. メニュー「︙」から「ホーム画面に追加」または「アプリをインストール」を選択。
+3. ホーム画面のアイコンから、ネイティブアプリのように起動できます。
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
+## 開発者向け情報
+- Built with React, Vite, Tailwind CSS, Dexie.js (IndexedDB).
+    tseslint.configs.recommendedTypeChecked,
       // Alternatively, use this for stricter rules
       tseslint.configs.strictTypeChecked,
       // Optionally, add this for stylistic rules
       tseslint.configs.stylisticTypeChecked,
 
-      // Other configs...
     ],
     languageOptions: {
       parserOptions: {
