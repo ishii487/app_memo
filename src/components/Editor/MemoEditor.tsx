@@ -70,9 +70,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     }, [noteContent, elements, title]);
 
     // Constant for the infinite-ish canvas size
-    // Note: 20000x20000 causes canvas crash on many browsers (exceeds memory/area limits).
-    // Using 5000x10000 (50MP) is a safer upper limit for mobile/desktop compatibility while still being "huge".
-    const PAGE_SIZE = { width: 5000, height: 10000 };
+    // Note: 20000x20000 causes canvas crash. 5000x10000 was still heavy.
+    // User requested 2000x4000 for better performance.
+    const PAGE_SIZE = { width: 2000, height: 4000 };
 
     // Draw canvas
     const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
