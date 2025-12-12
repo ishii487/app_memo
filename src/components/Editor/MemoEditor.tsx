@@ -152,6 +152,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 ctx.strokeRect(x, y, width, height);
             } else if (el.type === 'text') {
                 ctx.font = `${el.fontSize}px sans-serif`;
+                // Ensure text color is black for visibility
+                ctx.fillStyle = 'black';
                 ctx.fillText(el.content, el.x, el.y);
 
                 if (isSelected) {
@@ -304,13 +306,13 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         if (el.type === 'text') {
-            // Unused var removed
-            // Rough bounding box for hit test
-            // Assume width based on char count * fontSize * 0.6
+            // Check bounding box
+            const _ = threshold; // Unused but keep for symmetry if needed
+            // Approximate width
             const w = el.content.length * el.fontSize * 0.6;
             const h = el.fontSize;
-            // Origin is bottom-left usually for fillText
-            return point.x >= el.x && point.x <= el.x + w && point.y >= el.y - h && point.y <= el.y;
+            // Hit test: origin is bottom-left
+            return point.x >= el.x && point.x <= el.x + w && point.y >= el.y - h && point.y <= el.y + 10;
         }
 
         return false;
@@ -342,7 +344,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             return isInside({ x: el.params.x, y: el.params.y });
         }
         if (el.type === 'text') {
-            return isInside({ x: el.x, y: el.y });
+            // Text origin is bottom-left, check origin
+            return isInside({ x: el.x, y: el.y - el.fontSize / 2 });
         }
         return false;
     };
@@ -367,9 +370,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const pt = getLocalPoint(e.clientX, e.clientY);
 
         // TEXT MODE: Create or Edit
+        // Priority: Hit existing text first
         if (mode === 'text' && pointers.length === 1) {
-            // Check if tapped on existing text -> Edit
             let hitText = null;
+            // Iterate in reverse to hit top-most first
             for (let i = elements.length - 1; i >= 0; i--) {
                 const el = elements[i];
                 if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
@@ -379,23 +383,19 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
 
             if (hitText) {
+                // Edit existing
                 setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
-                // Remove from canvas temporarily while editing? Or keep it?
-                // Standard behavior: keep it until updated.
-                // Or remove it so we don't see double.
-                // Let's remove it for clean editing.
                 setElements(prev => prev.filter(e => e.id !== hitText!.id));
             } else {
                 // Create new
-                // If keyboard is already open (textInput not null), maybe commit that first?
-                // Logic: clicking outside commits previous.
+                // If input already open, commit it first
                 if (textInput) {
                     commitText();
                 }
+                // Small delay to prevent immediate close if we just clicked? 
+                // No, just open new input at new pos
                 setTextInput({ x: pt.x, y: pt.y, text: '' });
             }
-
-            // Focus logic needs to happen in useEffect or after render
             return;
         }
 
@@ -418,19 +418,15 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
             if (foundId) {
                 // If clicking a selected item, start dragging ALL selected
+                // But if we clicked an item that is NOT in the current selection, selection should reset to just this item
                 if (selectedIds.has(foundId)) {
-                    isDraggingSelection.current = true;
-                    lastDragPos.current = pt;
+                    // Start dragging current selection
                 } else {
-                    // Clicked unselected item
-                    // If Shift key? (No shift on mobile)
-                    // If just click -> Select ONLY this (clear others)
-                    // But if we want multi-select by tap, maybe toggling?
-                    // Standard: Box select for multiple. Click clears and selects new.
+                    // New single selection
                     setSelectedIds(new Set([foundId]));
-                    isDraggingSelection.current = true;
-                    lastDragPos.current = pt;
                 }
+                isDraggingSelection.current = true;
+                lastDragPos.current = pt;
             } else {
                 // Clicked Empty Space
                 // Clear selection
@@ -848,35 +844,41 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         {renderContentView()}
                     </div>
 
+
+                    <canvas
+                        ref={canvasRef}
+                        className={cn("absolute inset-0 pointer-events-none")}
+                    />
+
                     {/* Text Input Overlay (Transformed space) */}
+                    {/* Move AFTER the canvas to ensure it is on top for clicks, but canvas has pointer-events-none so it is fine either way. 
+                         However, visually, we want text input on top of strokes. */}
                     {textInput && (
                         <textarea
                             ref={textInputRef}
                             style={{
                                 position: 'absolute',
                                 left: textInput.x,
-                                top: textInput.y - fontSize, // Adjust for baseline
+                                top: textInput.y - fontSize, // Adjust for baseline to match canvas text
                                 fontSize: fontSize + 'px',
                                 minWidth: '100px',
                                 color: 'black',
                                 background: 'transparent',
-                                border: '1px dashed #ccc',
+                                border: '1px dashed #3b82f6',
                                 outline: 'none',
                                 resize: 'none',
                                 overflow: 'hidden',
                                 height: (fontSize * 1.5) + 'px',
-                                whiteSpace: 'nowrap'
+                                whiteSpace: 'nowrap',
+                                zIndex: 100, // Explicit High Z-Index
+                                fontFamily: 'sans-serif',
+                                lineHeight: '1'
                             }}
                             value={textInput.text}
                             onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
                             onPointerDown={(e) => e.stopPropagation()} // Let us type
                         />
                     )}
-
-                    <canvas
-                        ref={canvasRef}
-                        className={cn("absolute inset-0 pointer-events-none")}
-                    />
                 </div>
 
                 {/* Info Overlay */}
