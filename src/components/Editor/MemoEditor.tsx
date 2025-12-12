@@ -58,7 +58,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const initialScale = useRef<number>(1);
     const lastCenter = useRef<{ x: number, y: number } | null>(null);
 
-    const [showUpdateMessage, setShowUpdateMessage] = useState(false);
+
 
     useEffect(() => {
         db.notes.get(noteId).then(n => {
@@ -67,10 +67,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
 
-                setShowUpdateMessage(true);
-                setTimeout(() => setShowUpdateMessage(false), 3000);
-            }
-        });
+                if (n) {
+                    setTitle(n.title || '');
+                    setNoteContent(n.content || '');
+                    if (n.drawings) setElements(n.drawings);
+                }
+            });
     }, [noteId]);
 
     const saveNote = async () => {
@@ -746,206 +748,194 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         // 2. Background Text Selection
-        if (!textareaRef.current) return;
-        const start = textareaRef.current.selectionStart;
-        const end = textareaRef.current.selectionEnd;
-        const text = noteContent;
-        const selection = text.substring(start, end);
+        alert(`Link created to "${title}"`);
+        return;
+    }
 
-        if (selection) {
-            const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
-            setNoteContent(newText);
-        } else {
-            const title = prompt("Link to Note (Title):");
-            if (title) {
-                const newText = text.substring(0, start) + `[[${title}]]` + text.substring(end);
-                setNoteContent(newText);
-            }
+    alert("Please select an element to link.");
+};
+
+const renderContentView = () => {
+    const parts = noteContent.split(/(\[\[.*?\]\])/g);
+    return parts.map((part, i) => {
+        if (part.startsWith('[[') && part.endsWith(']]')) {
+            const content = part.slice(2, -2);
+            return (
+                <span
+                    key={i}
+                    className="text-blue-600 underline cursor-pointer hover:text-blue-800"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onLinkClick(content);
+                    }}
+                >
+                    {content}
+                </span>
+            );
         }
-        setMode('view');
-    };
+        return <span key={i}>{part}</span>;
+    });
+};
 
-    const renderContentView = () => {
-        const parts = noteContent.split(/(\[\[.*?\]\])/g);
-        return parts.map((part, i) => {
-            if (part.startsWith('[[') && part.endsWith(']]')) {
-                const content = part.slice(2, -2);
-                return (
-                    <span
-                        key={i}
-                        className="text-blue-600 underline cursor-pointer hover:text-blue-800"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onLinkClick(content);
-                        }}
-                    >
-                        {content}
-                    </span>
-                );
-            }
-            return <span key={i}>{part}</span>;
-        });
-    };
-
-    // Delete Selected
-    const onDelete = () => {
-        if (selectedIds.size > 0) {
-            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
-            setSelectedIds(new Set());
-        }
-    };
+// Delete Selected
+const onDelete = () => {
+    if (selectedIds.size > 0) {
+        setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
+        setSelectedIds(new Set());
+    }
+};
 
 
-    return (
-        <div className="flex flex-col h-full bg-white relative overflow-hidden">
-            {/* Update Toast */}
-            {showUpdateMessage && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg z-[100] animate-in fade-in slide-in-from-top-4 duration-300 font-bold text-sm pointer-events-none">
-                    更新完了
+return (
+    <div className="flex flex-col h-full bg-white relative overflow-hidden">
+        {/* Update Toast */}
+        {showUpdateMessage && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg z-[100] animate-in fade-in slide-in-from-top-4 duration-300 font-bold text-sm pointer-events-none">
+                更新完了
+            </div>
+        )}
+
+        {/* Toolbar (Fixed) */}
+        <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
+            <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
+            <div className="h-6 w-px bg-border mx-2" />
+            <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
+            <button onClick={() => setMode('select')} className={cn("p-2 rounded", mode === 'select' && "bg-primary/20 text-primary")} title="Select Mode"><MousePointer2 size={20} /></button>
+            <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
+            <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
+            <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
+
+            {/* Width Slider (Only for Pen/Eraser) */}
+            {(mode === 'pen' || mode === 'eraser') && (
+                <div className="flex items-center gap-2 ml-2 bg-white/50 p-1 rounded border">
+                    <div className={cn("w-2 h-2 rounded-full bg-black", mode === 'eraser' && "bg-red-500")}
+                        style={{ width: mode === 'pen' ? penWidth : eraserWidth / 3, height: mode === 'pen' ? penWidth : eraserWidth / 3 }} />
+                    <input
+                        type="range"
+                        min={mode === 'pen' ? "1" : "5"}
+                        max={mode === 'pen' ? "20" : "50"}
+                        value={mode === 'pen' ? penWidth : eraserWidth}
+                        onChange={e => mode === 'pen' ? setPenWidth(Number(e.target.value)) : setEraserWidth(Number(e.target.value))}
+                        className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
                 </div>
             )}
 
-            {/* Toolbar (Fixed) */}
-            <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
-                <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
-                <div className="h-6 w-px bg-border mx-2" />
-                <button onClick={() => setMode('view')} className={cn("p-2 rounded", mode === 'view' && "bg-primary/20 text-primary")} title="Read/Pan Mode"><Eye size={20} /></button>
-                <button onClick={() => setMode('select')} className={cn("p-2 rounded", mode === 'select' && "bg-primary/20 text-primary")} title="Select Mode"><MousePointer2 size={20} /></button>
-                <button onClick={() => setMode('text')} className={cn("p-2 rounded", mode === 'text' && "bg-primary/20 text-primary")} title="Text Mode"><Type size={20} /></button>
-                <button onClick={() => setMode('pen')} className={cn("p-2 rounded", mode === 'pen' && "bg-primary/20 text-primary")} title="Pen Mode"><Pen size={20} /></button>
-                <button onClick={() => setMode('eraser')} className={cn("p-2 rounded", mode === 'eraser' && "bg-destructive/10 text-destructive")} title="Eraser Mode"><Eraser size={20} /></button>
-
-                {/* Width Slider (Only for Pen/Eraser) */}
-                {(mode === 'pen' || mode === 'eraser') && (
-                    <div className="flex items-center gap-2 ml-2 bg-white/50 p-1 rounded border">
-                        <div className={cn("w-2 h-2 rounded-full bg-black", mode === 'eraser' && "bg-red-500")}
-                            style={{ width: mode === 'pen' ? penWidth : eraserWidth / 3, height: mode === 'pen' ? penWidth : eraserWidth / 3 }} />
-                        <input
-                            type="range"
-                            min={mode === 'pen' ? "1" : "5"}
-                            max={mode === 'pen' ? "20" : "50"}
-                            value={mode === 'pen' ? penWidth : eraserWidth}
-                            onChange={e => mode === 'pen' ? setPenWidth(Number(e.target.value)) : setEraserWidth(Number(e.target.value))}
-                            className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                        />
-                    </div>
-                )}
-
-                {/* Font Size for Text Mode */}
-                {mode === 'text' && (
-                    <div className="flex items-center gap-1 ml-2 bg-white/50 p-1 rounded border">
-                        <Type size={14} className="text-gray-500" />
-                        <input
-                            type="number"
-                            min="10"
-                            max="100"
-                            value={fontSize}
-                            onChange={e => setFontSize(Number(e.target.value))}
-                            className="w-12 h-6 text-sm border rounded px-1"
-                        />
-                    </div>
-                )}
-
-                {/* Delete Button for Selection */}
-                {selectedIds.size > 0 && mode === 'select' && (
-                    <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
-                )}
-
-                <div className="flex-1" />
-
-                {/* Shape Checkbox */}
-                <label className="flex items-center gap-1 text-xs select-none cursor-pointer mr-2 px-2 hover:bg-muted py-1 rounded">
-                    <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
-                    <span>Shape</span>
-                </label>
-
-                {/* Extra Tools */}
-                <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
-                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
-
-                <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
-                <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
-            </div>
-
-            {/* Main Title Input (Fixed below toolbar) */}
-            <div className="px-4 py-2 z-40 bg-white border-b">
-                <input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    placeholder="Title"
-                    className="text-2xl font-bold w-full outline-none"
-                />
-            </div>
-
-            {/* Canvas Container */}
-            <div
-                className="flex-1 relative overflow-hidden bg-gray-50 touch-none"
-                ref={containerRef}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerLeave={onPointerUp}
-            >
-                {/* Transformed Layer */}
-                <div
-                    style={{
-                        transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-                        transformOrigin: '0 0',
-                        width: PAGE_SIZE.width,
-                        height: PAGE_SIZE.height,
-                        willChange: 'transform',
-                        backgroundColor: 'white',
-                        boxShadow: '0 0 20px rgba(0,0,0,0.1)'
-                    }}
-                >
-                    {/* Background Text Note (Legacy/Underlay) */}
-                    <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono pointer-events-none")}>
-                        {renderContentView()}
-                    </div>
-
-
-                    <canvas
-                        ref={canvasRef}
-                        className={cn("absolute inset-0 pointer-events-none")}
+            {/* Font Size for Text Mode */}
+            {mode === 'text' && (
+                <div className="flex items-center gap-1 ml-2 bg-white/50 p-1 rounded border">
+                    <Type size={14} className="text-gray-500" />
+                    <input
+                        type="number"
+                        min="10"
+                        max="100"
+                        value={fontSize}
+                        onChange={e => setFontSize(Number(e.target.value))}
+                        className="w-12 h-6 text-sm border rounded px-1"
                     />
+                </div>
+            )}
 
-                    {/* Text Input Overlay (Transformed space) */}
-                    {/* Move AFTER the canvas to ensure it is on top for clicks, but canvas has pointer-events-none so it is fine either way. 
+            {/* Delete Button for Selection */}
+            {selectedIds.size > 0 && mode === 'select' && (
+                <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
+            )}
+
+            <div className="flex-1" />
+
+            {/* Shape Checkbox */}
+            <label className="flex items-center gap-1 text-xs select-none cursor-pointer mr-2 px-2 hover:bg-muted py-1 rounded">
+                <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
+                <span>Shape</span>
+            </label>
+
+            {/* Extra Tools */}
+            <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
+            <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
+
+            <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
+            <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
+        </div>
+
+        {/* Main Title Input (Fixed below toolbar) */}
+        <div className="px-4 py-2 z-40 bg-white border-b">
+            <input
+                type="text"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Title"
+                className="text-2xl font-bold w-full outline-none"
+            />
+        </div>
+
+        {/* Canvas Container */}
+        <div
+            className="flex-1 relative overflow-hidden bg-gray-50 touch-none"
+            ref={containerRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={onPointerUp}
+        >
+            {/* Transformed Layer */}
+            <div
+                style={{
+                    transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                    transformOrigin: '0 0',
+                    width: PAGE_SIZE.width,
+                    height: PAGE_SIZE.height,
+                    willChange: 'transform',
+                    backgroundColor: 'white',
+                    boxShadow: '0 0 20px rgba(0,0,0,0.1)'
+                }}
+            >
+                {/* Background Text Note (Legacy/Underlay) */}
+                <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono pointer-events-none")}>
+                    {renderContentView()}
+                </div>
+
+
+                <canvas
+                    ref={canvasRef}
+                    className={cn("absolute inset-0 pointer-events-none")}
+                />
+
+                {/* Text Input Overlay (Transformed space) */}
+                {/* Move AFTER the canvas to ensure it is on top for clicks, but canvas has pointer-events-none so it is fine either way. 
                          However, visually, we want text input on top of strokes. */}
-                    {textInput && (
-                        <textarea
-                            ref={textInputRef}
-                            style={{
-                                position: 'absolute',
-                                left: textInput.x,
-                                top: textInput.y - fontSize, // Adjust for baseline to match canvas text
-                                fontSize: fontSize + 'px',
-                                minWidth: '100px',
-                                color: 'black',
-                                background: 'transparent',
-                                border: '1px dashed #3b82f6',
-                                outline: 'none',
-                                resize: 'none',
-                                overflow: 'hidden',
-                                height: (fontSize * 1.5) + 'px',
-                                whiteSpace: 'nowrap',
-                                zIndex: 100, // Explicit High Z-Index
-                                fontFamily: 'sans-serif',
-                                lineHeight: '1'
-                            }}
-                            value={textInput.text}
-                            onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                            onPointerDown={(e) => e.stopPropagation()} // Let us type
-                        />
-                    )}
-                </div>
+                {textInput && (
+                    <textarea
+                        ref={textInputRef}
+                        style={{
+                            position: 'absolute',
+                            left: textInput.x,
+                            top: textInput.y - fontSize, // Adjust for baseline to match canvas text
+                            fontSize: fontSize + 'px',
+                            minWidth: '100px',
+                            color: 'black',
+                            background: 'transparent',
+                            border: '1px dashed #3b82f6',
+                            outline: 'none',
+                            resize: 'none',
+                            overflow: 'hidden',
+                            height: (fontSize * 1.5) + 'px',
+                            whiteSpace: 'nowrap',
+                            zIndex: 100, // Explicit High Z-Index
+                            fontFamily: 'sans-serif',
+                            lineHeight: '1'
+                        }}
+                        value={textInput.text}
+                        onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                        onPointerDown={(e) => e.stopPropagation()} // Let us type
+                    />
+                )}
+            </div>
 
-                {/* Info Overlay */}
-                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
-                    {Math.round(transform.scale * 100)}%
-                </div>
+            {/* Info Overlay */}
+            <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
+                {Math.round(transform.scale * 100)}%
             </div>
         </div>
-    );
+    </div>
+);
 };
