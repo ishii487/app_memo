@@ -65,6 +65,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         };
     }, [noteContent, elements, title]);
 
+    // Constant for the infinite-ish canvas size
+    const PAGE_SIZE = { width: 2000, height: 4000 };
+
     // Draw canvas
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -72,11 +75,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        if (containerRef.current) {
-            if (canvas.width !== containerRef.current.clientWidth || canvas.height !== containerRef.current.clientHeight) {
-                canvas.width = containerRef.current.clientWidth;
-                canvas.height = containerRef.current.clientHeight;
-            }
+        // Match canvas bitmap size to the huge page size
+        if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
+            canvas.width = PAGE_SIZE.width;
+            canvas.height = PAGE_SIZE.height;
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -125,7 +127,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
             ctx.stroke();
         }
-    }, [elements, mode, containerRef.current?.clientWidth, containerRef.current?.clientHeight, transform, setTick]);
+    }, [elements, mode, transform, setTick]);
     // Note: 'transform' dependency is mainly if we need to redraw during expensive transform? 
     // Actually, transform is CSS-only, BUT currentStrokeRef updates don't trigger this effect automatically
     // unless 'setTick' is called.
@@ -400,14 +402,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 onPointerUp={onPointerUp}
                 onPointerLeave={onPointerUp}
             >
-                {/* Transformed Layer */}
+                {/* Transformed Layer - Huge Page */}
                 <div
                     style={{
                         transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                         transformOrigin: '0 0',
-                        width: '100%',
-                        height: '100%',
-                        willChange: 'transform'
+                        width: PAGE_SIZE.width,
+                        height: PAGE_SIZE.height,
+                        willChange: 'transform',
+                        backgroundColor: 'white', // Ensure it looks like paper
+                        boxShadow: '0 0 20px rgba(0,0,0,0.1)' // Boundary visual
                     }}
                 >
                     {/* Text Content Layer */}
