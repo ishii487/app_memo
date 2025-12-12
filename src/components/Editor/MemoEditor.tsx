@@ -719,27 +719,33 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             const title = prompt("New Note Title:", defaultTitle);
             if (!title) return;
 
-            // Create Note
-            const newNote = {
-                id: uuidv4(),
-                title: title,
-                content: '',
-                drawings: [],
-                folderId: 'root', // Explicitly set folderId
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-            };
-            await db.notes.add(newNote);
+            try {
+                // Create Note
+                const newNote = {
+                    id: uuidv4(),
+                    title: title,
+                    content: '',
+                    drawings: [],
+                    folderId: 'root', // Explicitly set folderId
+                    createdAt: Date.now(),
+                    updatedAt: Date.now()
+                };
+                console.log("Adding Note:", newNote);
+                await db.notes.add(newNote);
 
-            // Update Elements with Link
-            setElements(prev => prev.map(el => {
-                if (selectedIds.has(el.id)) {
-                    return { ...el, link: title };
-                }
-                return el;
-            }));
+                // Update Elements with Link
+                setElements(prev => prev.map(el => {
+                    if (selectedIds.has(el.id)) {
+                        return { ...el, link: title };
+                    }
+                    return el;
+                }));
 
-            alert(`Link created to "${title}"`);
+                alert(`Link created to "${title}"`);
+            } catch (e: any) {
+                console.error("Link Creation Error:", e);
+                alert(`Error creating link: ${e.message}`);
+            }
             return;
         }
 
