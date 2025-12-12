@@ -79,7 +79,11 @@ function App() {
           onLinkClick={handleLinkClick}
         />
       ) : (
-        <NoteList folderId={activeFolderId} onSelectNote={setActiveNoteId} />
+        <NoteList
+          folderId={activeFolderId}
+          onSelectNote={setActiveNoteId}
+          onSelectFolder={setActiveFolderId}
+        />
       )}
     </AppLayout>
   )

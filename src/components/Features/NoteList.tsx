@@ -1,19 +1,30 @@
 import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/db';
-import { Plus } from 'lucide-react';
+import { Plus, Folder as FolderIcon } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { cn } from '../../lib/utils';
 
 interface NoteListProps {
     folderId: string | null;
     onSelectNote: (noteId: string) => void;
+    onSelectFolder: (folderId: string) => void;
 }
 
-export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote }) => {
+export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSelectFolder }) => {
+    // Notes: If folderId is null, filter where folderId is NOT set (uncategorized)
     const notes = useLiveQuery(
         () => folderId
             ? db.notes.where('folderId').equals(folderId).reverse().sortBy('updatedAt')
-            : db.notes.orderBy('updatedAt').reverse().toArray()
+            : db.notes.filter(n => !n.folderId).reverse().sortBy('updatedAt')
+        , [folderId]
+    );
+
+    // Folders: Fetch subfolders (or root folders)
+    const subFolders = useLiveQuery(
+        () => folderId
+            ? db.folders.where('parentId').equals(folderId).toArray()
+            : db.folders.filter(f => !f.parentId).toArray()
         , [folderId]
     );
 
@@ -30,12 +41,14 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote }) =>
         onSelectNote(id);
     };
 
-    if (!notes) return <div className="p-8 text-center text-muted-foreground">読み込み中...</div>;
+    if (!notes || !subFolders) return <div className="p-8 text-center text-muted-foreground">読み込み中...</div>;
 
-    if (notes.length === 0) {
+    const isEmpty = notes.length === 0 && subFolders.length === 0;
+
+    if (isEmpty) {
         return (
             <div className="flex flex-col items-center justify-center h-full p-8 text-muted-foreground">
-                <p className="mb-4 text-center">このフォルダにはメモがありません</p>
+                <p className="mb-4 text-center">このフォルダには何もありません</p>
                 <button onClick={createNote} className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-full font-medium hover:bg-primary/90 transition-transform shadow-lg active:scale-95">
                     <Plus size={20} />
                     新規作成
@@ -47,13 +60,26 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote }) =>
     return (
         <div className="h-full flex flex-col w-full max-w-5xl mx-auto">
             <div className="p-4 pt-6 pb-2 px-6 flex justify-between items-center sticky top-0 bg-background/95 backdrop-blur z-10">
-                <h2 className="font-bold text-2xl tracking-tight">{folderId ? 'メモ' : 'すべてのメモ'}</h2>
+                <h2 className="font-bold text-2xl tracking-tight">{folderId ? 'メモ' : 'ホーム'}</h2>
                 <button onClick={createNote} className="p-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:bg-primary/90 transition-transform active:scale-95" aria-label="Create Note">
                     <Plus size={24} />
                 </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 px-6 pb-20">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {/* Folders */}
+                    {subFolders.map(folder => (
+                        <div
+                            key={folder.id}
+                            onClick={() => onSelectFolder(folder.id)}
+                            className="group flex flex-col p-5 rounded-xl border border-border bg-secondary/50 hover:bg-secondary cursor-pointer transition-all shadow-sm hover:shadow-md h-32 relative overflow-hidden justify-center items-center"
+                        >
+                            <FolderIcon size={32} className="mb-2 opacity-50 text-foreground" />
+                            <h3 className="font-bold text-lg text-center line-clamp-2">{folder.title}</h3>
+                        </div>
+                    ))}
+
+                    {/* Notes */}
                     {notes.map(note => (
                         <div
                             key={note.id}
