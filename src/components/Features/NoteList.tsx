@@ -29,7 +29,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
 
     // Folder Info: Fetch current folder if we are inside one
     const currentFolder = useLiveQuery(
-        () => folderId ? db.folders.get(folderId) : Promise.resolve(null),
+        async () => folderId ? await db.folders.get(folderId) : null,
         [folderId]
     );
 
