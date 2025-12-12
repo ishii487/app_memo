@@ -11,12 +11,6 @@ interface MemoEditorProps {
     noteId: string;
     onBack: () => void;
     onLinkClick: (title: string) => void;
-}
-
-interface MemoEditorProps {
-    noteId: string;
-    onBack: () => void;
-    onLinkClick: (title: string) => void;
     externalTitle?: string;
 }
 
