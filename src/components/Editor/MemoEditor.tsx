@@ -399,8 +399,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         // If clicking outside text input while it's open -> commit
-        if (textInput && mode !== 'text') {
+        if (textInput) {
             commitText();
+            return; // STOP processing to prevent immediate new input creation
         }
 
 
@@ -607,6 +608,19 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             if (e.pointerType === 'pen' || activePointers.current.size === 0) {
                 commitStroke();
             }
+        } else {
+            // Check for Link Navigation (Tap in View Mode)
+            if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
+                const pt = getLocalPoint(e.clientX, e.clientY);
+                // Find top-most element with link
+                for (let i = elements.length - 1; i >= 0; i--) {
+                    const el = elements[i];
+                    if (el.link && isPointNearElement(pt, el, 10)) {
+                        onLinkClick(el.link);
+                        break;
+                    }
+                }
+            }
         }
     };
 
@@ -691,17 +705,63 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     };
 
-    const insertLink = () => {
+    const insertLink = async () => {
+        // 1. Canvas Elements Selection
+        if (selectedIds.size > 0) {
+            const selectedEls = elements.filter(el => selectedIds.has(el.id));
+            if (selectedEls.length === 0) return;
+
+            // Determine default title
+            let defaultTitle = '';
+            if (selectedEls.length === 1 && selectedEls[0].type === 'text') {
+                defaultTitle = selectedEls[0].content;
+            }
+
+            // Prompt
+            const title = prompt("New Note Title:", defaultTitle);
+            if (!title) return;
+
+            // Create Note
+            const newNote = {
+                id: uuidv4(),
+                title: title,
+                content: '',
+                drawings: [],
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
+            await db.notes.add(newNote);
+
+            // Update Elements with Link
+            setElements(prev => prev.map(el => {
+                if (selectedIds.has(el.id)) {
+                    return { ...el, link: title };
+                }
+                return el;
+            }));
+
+            alert(`Link created to "${title}"`);
+            return;
+        }
+
+        // 2. Background Text Selection
         if (!textareaRef.current) return;
         const start = textareaRef.current.selectionStart;
         const end = textareaRef.current.selectionEnd;
         const text = noteContent;
         const selection = text.substring(start, end);
-        if (!selection) return;
 
-        const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
-        setNoteContent(newText);
-        setMode('view'); // Switch to view to follow link? Or stay? Current design stays.
+        if (selection) {
+            const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
+            setNoteContent(newText);
+        } else {
+            const title = prompt("Link to Note (Title):");
+            if (title) {
+                const newText = text.substring(0, start) + `[[${title}]]` + text.substring(end);
+                setNoteContent(newText);
+            }
+        }
+        setMode('view');
     };
 
     const renderContentView = () => {
