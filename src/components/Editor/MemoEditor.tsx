@@ -370,31 +370,66 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     // ... (refs)
 
-    // Helper to check if a point is close to a segment
-    // Simplified: Check if point is close to any point in the stroke
-    const isPointNearStroke = (point: Point, stroke: Point[], threshold: number) => {
-        // Fast bounding box check
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (const p of stroke) {
-            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-        }
-        if (point.x < minX - threshold || point.x > maxX + threshold ||
-            point.y < minY - threshold || point.y > maxY + threshold) return false;
+    // Geometry Helpers for Hit Testing
+    const distanceToSegment = (p: Point, v: Point, w: Point) => {
+        const l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
+        if (l2 === 0) return Math.sqrt(Math.pow(p.x - v.x, 2) + Math.pow(p.y - v.y, 2));
+        let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        return Math.sqrt(Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2));
+    };
 
-        // Detailed check
-        for (const p of stroke) {
-            const d = Math.sqrt(Math.pow(point.x - p.x, 2) + Math.pow(point.y - p.y, 2));
-            if (d < threshold) return true;
+    const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
+        const t = threshold + el.width / 2;
+
+        if (el.type === 'stroke') {
+            // Check bounding box first
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const p of el.points) {
+                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            }
+            if (point.x < minX - t || point.x > maxX + t || point.y < minY - t || point.y > maxY + t) return false;
+
+            for (let i = 0; i < el.points.length - 1; i++) {
+                if (distanceToSegment(point, el.points[i], el.points[i + 1]) < t) return true;
+            }
+            return false;
         }
+
+        if (el.type === 'line') {
+            const { start, end } = el.params;
+            return distanceToSegment(point, start, end) < t;
+        }
+
+        if (el.type === 'circle') {
+            const { x, y, radius } = el.params;
+            const d = Math.sqrt(Math.pow(point.x - x, 2) + Math.pow(point.y - y, 2));
+            return Math.abs(d - radius) < t;
+        }
+
+        if (el.type === 'rect') {
+            const { x, y, width, height } = el.params;
+            // Check 4 sides
+            const p1 = { x, y };
+            const p2 = { x: x + width, y };
+            const p3 = { x: x + width, y: y + height };
+            const p4 = { x, y: y + height };
+
+            return distanceToSegment(point, p1, p2) < t ||
+                distanceToSegment(point, p2, p3) < t ||
+                distanceToSegment(point, p3, p4) < t ||
+                distanceToSegment(point, p4, p1) < t;
+        }
+
         return false;
     };
 
-    const isStrokeNearStroke = (stroke1: Point[], stroke2: Point[], threshold: number) => {
-        // Check if any point in stroke1 is near stroke2
-        // Optimization: Check only a subset of points or bounding boxes
-        for (let i = 0; i < stroke1.length; i += 2) { // Skip some points for speed
-            if (isPointNearStroke(stroke1[i], stroke2, threshold)) return true;
+    const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
+        // Optimization: Skip checking every single point of the eraser stroke
+        // Check every 3rd point for performance
+        for (let i = 0; i < stroke.length; i += 3) {
+            if (isPointNearElement(stroke[i], el, threshold)) return true;
         }
         return false;
     };
@@ -406,14 +441,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         if (mode === 'eraser') {
             // Object Eraser Logic
             const threshold = eraserWidth / 2;
-            setElements(prev => prev.filter(el => {
-                if (el.type !== 'stroke') return true; // TODO: Support erasing shapes
-                // Check intersection
-                if (isStrokeNearStroke(stroke, el.points, threshold + (el.width || 2) / 2)) {
-                    return false; // Remove element
-                }
-                return true;
-            }));
+
+            setElements(prev => {
+                const newElements = prev.filter(el => {
+                    if (isStrokeIntersectingElement(stroke, el, threshold)) {
+                        return false; // Remove element
+                    }
+                    return true;
+                });
+                return newElements.length !== prev.length ? newElements : prev;
+            });
 
             currentStrokeRef.current = [];
             setTick(t => t + 1);
