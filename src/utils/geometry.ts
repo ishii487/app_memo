@@ -2,7 +2,8 @@ export interface Point { x: number; y: number; }
 export interface Stroke { points: Point[]; color: string; width: number; type: 'stroke'; id: string }
 export interface Shape { type: 'line' | 'rect' | 'circle'; params: any; color: string; width: number; id: string }
 
-export type DrawingElement = Stroke | Shape;
+export interface TextElement { x: number; y: number; content: string; fontSize: number; color: string; type: 'text'; id: string }
+export type DrawingElement = Stroke | Shape | TextElement;
 
 export function distance(a: Point, b: Point) {
     return Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2));

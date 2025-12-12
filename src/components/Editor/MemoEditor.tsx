@@ -1,10 +1,11 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { db } from '../../db/db';
-import { recognizeShape, type DrawingElement, type Point } from '../../utils/geometry';
+import { recognizeShape, type DrawingElement, type Point, type TextElement } from '../../utils/geometry';
 import { recognizeTextFromCanvas } from '../../utils/ocr';
 import { v4 as uuidv4 } from 'uuid';
 import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useLongPress } from 'use-long-press'; // Try to avoid adding new deps if possible, implementing simple logic
 
 interface MemoEditorProps {
     noteId: string;
@@ -16,19 +17,28 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view' | 'select'>('pen');
     const [noteContent, setNoteContent] = useState('');
     const [elements, setElements] = useState<DrawingElement[]>([]);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
+
+    // Selection State
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [selectionBox, setSelectionBox] = useState<{ start: Point, end: Point } | null>(null);
+
     const [autoShape, setAutoShape] = useState(true);
     const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [title, setTitle] = useState('');
 
+    // Text Input State
+    const [textInput, setTextInput] = useState<{ x: number, y: number, text: string, id?: string } | null>(null);
+
     // New state for widths (Must be declared before use)
     const [penWidth, setPenWidth] = useState(3);
     const [eraserWidth, setEraserWidth] = useState(20);
+    const [fontSize, setFontSize] = useState(24);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const containerRef = useRef<HTMLDivElement>(null);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null); // For background text (Note content)
+    const textInputRef = useRef<HTMLTextAreaElement>(null); // For canvas text input
 
     // Gesture state
     const activePointers = useRef<Map<number, { x: number, y: number, type: string }>>(new Map());
@@ -57,7 +67,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
 
-                // Show "Update Complete" message
                 setShowUpdateMessage(true);
                 setTimeout(() => setShowUpdateMessage(false), 3000);
             }
@@ -81,21 +90,15 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         };
     }, [noteContent, elements, title]);
 
-    // Constant for the infinite-ish canvas size
-    // Note: 20000x20000 causes canvas crash. 5000x10000 was still heavy.
-    // User requested 2000x4000 for better performance.
     const PAGE_SIZE = { width: 2000, height: 4000 };
 
     // Draw canvas
     const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-    // Helper to draw smooth curves
     const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
         if (points.length < 2) return;
         ctx.beginPath();
         ctx.moveTo(points[0].x, points[0].y);
-
-        // Quadratic Bezier Smoothing
         for (let i = 1; i < points.length - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
@@ -103,14 +106,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             const midY = (p1.y + p2.y) / 2;
             ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
         }
-        // Last segment
         ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
         ctx.stroke();
     };
 
-    // 1. Init/Update Buffer when elements change
+    // 1. Init/Update Buffer
     useEffect(() => {
-        // Create buffer if needed
         if (!bufferCanvasRef.current) {
             bufferCanvasRef.current = document.createElement('canvas');
             bufferCanvasRef.current.width = PAGE_SIZE.width;
@@ -120,16 +121,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const ctx = buffer.getContext('2d');
         if (!ctx) return;
 
-        // Clear buffer
         ctx.clearRect(0, 0, buffer.width, buffer.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // Render saved elements to buffer
         elements.forEach(el => {
-            ctx.strokeStyle = el.id === selectedId ? '#3b82f6' : el.color; // Highlight selected
-            ctx.lineWidth = el.id === selectedId ? (el.width + 2) : el.width;
-            if (el.id === selectedId) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
+            const isSelected = selectedIds.has(el.id);
+            ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
+            ctx.fillStyle = el.color; // For textMainly
+            ctx.lineWidth = isSelected ? (el.width + 2) : el.width;
+            if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
             ctx.shadowColor = '#3b82f6';
 
             if (el.type === 'stroke') {
@@ -148,16 +149,27 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             } else if (el.type === 'rect') {
                 const { x, y, width, height } = el.params;
                 ctx.strokeRect(x, y, width, height);
+            } else if (el.type === 'text') {
+                ctx.font = \`\${el.fontSize}px sans-serif\`;
+                ctx.fillText(el.content, el.x, el.y);
+                
+                if (isSelected) {
+                    const metrics = ctx.measureText(el.content);
+                    const h = el.fontSize; // Approx
+                    ctx.save();
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(el.x - 2, el.y - h, metrics.width + 4, h + 4);
+                    ctx.restore();
+                }
             }
         });
-        ctx.shadowBlur = 0; // Reset
-
-        // Force screen update
+        ctx.shadowBlur = 0;
         setTick(t => t + 1);
 
-    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedId]);
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds]); 
 
-    // 2. Render Screen (Fast Loop)
+    // 2. Render Screen
     useEffect(() => {
         const canvas = canvasRef.current;
         const buffer = bufferCanvasRef.current;
@@ -165,7 +177,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Ensure visible canvas matches page size (it should already)
         if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
             canvas.width = PAGE_SIZE.width;
             canvas.height = PAGE_SIZE.height;
@@ -175,22 +186,19 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // A. Blit the Buffer (O(1) operation)
         ctx.drawImage(buffer, 0, 0);
 
-        // B. Draw current stroke (Dynamic, usually small)
+        // Draw current stroke
         const stroke = currentStrokeRef.current;
         if (stroke.length > 0) {
-            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black'; // Eraser still red trace
+            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
             ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
-            // Opacity for eraser trace to make it look like a "selection"
             if (mode === 'eraser') ctx.globalAlpha = 0.5;
-
-            // Inline smoothing for current stroke
+            
             if (stroke.length < 2) {
-                ctx.beginPath();
-                ctx.moveTo(stroke[0].x, stroke[0].y);
-                ctx.stroke();
+                 ctx.beginPath();
+                 ctx.moveTo(stroke[0].x, stroke[0].y);
+                 ctx.stroke();
             } else {
                 ctx.beginPath();
                 ctx.moveTo(stroke[0].x, stroke[0].y);
@@ -206,9 +214,27 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
             ctx.globalAlpha = 1.0;
         }
-    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements]);
 
-    // Coordinate helper: Screen -> Canvas Local
+        // Draw Selection Box
+        if (selectionBox) {
+            const { start, end } = selectionBox;
+            const x = Math.min(start.x, end.x);
+            const y = Math.min(start.y, end.y);
+            const w = Math.abs(end.x - start.x);
+            const h = Math.abs(end.y - start.y);
+
+            ctx.save();
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+        }
+
+    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements, selectionBox]); 
+
     const getLocalPoint = (client_x: number, client_y: number) => {
         if (!containerRef.current) return { x: 0, y: 0 };
         const rect = containerRef.current.getBoundingClientRect();
@@ -227,7 +253,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     };
 
-    // Helper functions for Hit Testing need to be hoisted or accessible here
     const distanceToSegment = (p: Point, v: Point, w: Point) => {
         const l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
         if (l2 === 0) return Math.sqrt(Math.pow(p.x - v.x, 2) + Math.pow(p.y - v.y, 2));
@@ -237,79 +262,151 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
-        const t = threshold + el.width / 2;
-
         if (el.type === 'stroke') {
-            // Check bounding box first
+            const t = threshold + el.width / 2;
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             for (const p of el.points) {
                 minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
                 minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
             }
             if (point.x < minX - t || point.x > maxX + t || point.y < minY - t || point.y > maxY + t) return false;
-
             for (let i = 0; i < el.points.length - 1; i++) {
-                if (distanceToSegment(point, el.points[i], el.points[i + 1]) < t) return true;
+                if (distanceToSegment(point, el.points[i], el.points[i+1]) < t) return true;
             }
             return false;
-        }
-
+        } 
+        
         if (el.type === 'line') {
+            const t = threshold + el.width / 2;
             const { start, end } = el.params;
             return distanceToSegment(point, start, end) < t;
         }
 
         if (el.type === 'circle') {
+            const t = threshold + el.width / 2;
             const { x, y, radius } = el.params;
             const d = Math.sqrt(Math.pow(point.x - x, 2) + Math.pow(point.y - y, 2));
             return Math.abs(d - radius) < t;
         }
 
         if (el.type === 'rect') {
+            const t = threshold + el.width / 2;
             const { x, y, width, height } = el.params;
-            // Check 4 sides
             const p1 = { x, y };
             const p2 = { x: x + width, y };
             const p3 = { x: x + width, y: y + height };
             const p4 = { x, y: y + height };
-
             return distanceToSegment(point, p1, p2) < t ||
-                distanceToSegment(point, p2, p3) < t ||
-                distanceToSegment(point, p3, p4) < t ||
-                distanceToSegment(point, p4, p1) < t;
+                   distanceToSegment(point, p2, p3) < t ||
+                   distanceToSegment(point, p3, p4) < t ||
+                   distanceToSegment(point, p4, p1) < t;
         }
 
+        if (el.type === 'text') {
+            const t = threshold;
+            // Rough bounding box for hit test
+            // Assume width based on char count * fontSize * 0.6
+            const w = el.content.length * el.fontSize * 0.6;
+            const h = el.fontSize;
+            // Origin is bottom-left usually for fillText
+            return point.x >= el.x && point.x <= el.x + w && point.y >= el.y - h && point.y <= el.y;
+        }
+
+        return false;
+    };
+
+    const isElementInBox = (el: DrawingElement, box: { start: Point, end: Point }) => {
+        const x1 = Math.min(box.start.x, box.end.x);
+        const x2 = Math.max(box.start.x, box.end.x);
+        const y1 = Math.min(box.start.y, box.end.y);
+        const y2 = Math.max(box.start.y, box.end.y);
+
+        // Simple check: is any point inside box?
+        // Or for shapes, is the bounding box intersecting? 
+        // Let's do a simple check: if any of the key points are inside.
+        
+        const isInside = (p: Point) => p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
+
+        if (el.type === 'stroke') {
+            return el.points.some(isInside);
+        }
+        if (el.type === 'line') {
+            return isInside(el.params.start) || isInside(el.params.end);
+        }
+        if (el.type === 'circle') {
+            // Check center
+            return isInside({ x: el.params.x, y: el.params.y });
+        }
+        if (el.type === 'rect') {
+            return isInside({ x: el.params.x, y: el.params.y });
+        }
+        if (el.type === 'text') {
+            return isInside({ x: el.x, y: el.y });
+        }
         return false;
     };
 
     const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
-        // Optimization: Skip checking every single point of the eraser stroke
-        // Check every 3rd point for performance
-        for (let i = 0; i < stroke.length; i += 3) {
-            if (isPointNearElement(stroke[i], el, threshold)) return true;
-        }
-        return false;
+         for (let i = 0; i < stroke.length; i += 3) {
+             if (isPointNearElement(stroke[i], el, threshold)) return true;
+         }
+         return false;
     };
 
 
     const onPointerDown = (e: React.PointerEvent) => {
-        e.preventDefault(); // Stop default touch actions
+        e.preventDefault(); 
         e.stopPropagation();
 
         activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
         e.currentTarget.setPointerCapture(e.pointerId);
 
         const pointers = Array.from(activePointers.current.values());
-
-        // Pen priority: If Pen is down, we draw. Ignore multi-touch palm.
         const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
 
-        // Selection Logic
+        // TEXT MODE: Create or Edit
+        if (mode === 'text' && pointers.length === 1) {
+            // Check if tapped on existing text -> Edit
+            let hitText = null;
+            for (let i = elements.length - 1; i >= 0; i--) {
+                const el = elements[i];
+                if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
+                    hitText = el;
+                    break;
+                }
+            }
+
+            if (hitText) {
+                setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
+                // Remove from canvas temporarily while editing? Or keep it?
+                // Standard behavior: keep it until updated.
+                // Or remove it so we don't see double.
+                // Let's remove it for clean editing.
+                setElements(prev => prev.filter(e => e.id !== hitText!.id));
+            } else {
+                // Create new
+                // If keyboard is already open (textInput not null), maybe commit that first?
+                // Logic: clicking outside commits previous.
+                if (textInput) {
+                    commitText();
+                }
+                setTextInput({ x: pt.x, y: pt.y, text: '' });
+            }
+            
+            // Focus logic needs to happen in useEffect or after render
+            return;
+        }
+        
+        // If clicking outside text input while it's open -> commit
+        if (textInput && mode !== 'text') {
+            commitText();
+        }
+
+
+        // SELECTION MODE
         if (mode === 'select' && pointers.length === 1) {
-            isPanning.current = false;
-            const pt = getLocalPoint(e.clientX, e.clientY);
-
-            // Hit Test (Reverse to pick top-most)
+            // Check Hit
             let foundId: string | null = null;
             for (let i = elements.length - 1; i >= 0; i--) {
                 if (isPointNearElement(pt, elements[i], 10)) {
@@ -319,46 +416,53 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
 
             if (foundId) {
-                setSelectedId(foundId);
-                isDraggingSelection.current = true;
-                lastDragPos.current = pt;
+                // If clicking a selected item, start dragging ALL selected
+                if (selectedIds.has(foundId)) {
+                    isDraggingSelection.current = true;
+                    lastDragPos.current = pt;
+                } else {
+                    // Clicked unselected item
+                    // If Shift key? (No shift on mobile)
+                    // If just click -> Select ONLY this (clear others)
+                    // But if we want multi-select by tap, maybe toggling?
+                    // Standard: Box select for multiple. Click clears and selects new.
+                    setSelectedIds(new Set([foundId]));
+                    isDraggingSelection.current = true;
+                    lastDragPos.current = pt;
+                }
             } else {
-                setSelectedId(null); // Deselect
-                // Maybe start panning if click on empty space?
-                isPanning.current = true;
-                initialPinchDist.current = 0; // Reset
-                lastCenter.current = pt; // For pan start? Simplified for 1 finger pan in select mode maybe?
-                // Actually let's stick to 2-finger pan standard, or 1-finger pan if nothing selected?
-                // For now, if nothing selected, do nothing or start pan.
+                // Clicked Empty Space
+                // Clear selection
+                setSelectedIds(new Set());
+                // Start Box Selection
+                setSelectionBox({ start: pt, end: pt });
             }
+
+            isPanning.current = false; // Override pan
             return;
         }
 
         if (hasPen && e.pointerType === 'pen') {
-            // Start Drawing with Pen
             if (['pen', 'eraser'].includes(mode)) {
                 isPanning.current = false;
-                currentStrokeRef.current = [getLocalPoint(e.clientX, e.clientY)];
-                setTick(t => t + 1); // Trigger render
+                currentStrokeRef.current = [pt];
+                setTick(t => t + 1);
             }
             return;
         }
 
-        // Touch logic
+        // Standard Pan/Zoom gestures
         if (pointers.length === 2 && !hasPen) {
-            // Start Pinch/Pan (only if no pen)
             isPanning.current = true;
-            currentStrokeRef.current = []; // Cancel drawing
+            currentStrokeRef.current = [];
             setTick(t => t + 1);
-
             initialPinchDist.current = dist(pointers[0], pointers[1]);
             initialScale.current = transform.scale;
             lastCenter.current = mid(pointers[0], pointers[1]);
         } else if (pointers.length === 1 && !hasPen) {
-            // Start 1-finger Drawing (if mode is pen/eraser and not view)
             if (['pen', 'eraser'].includes(mode)) {
                 isPanning.current = false;
-                currentStrokeRef.current = [getLocalPoint(e.clientX, e.clientY)];
+                currentStrokeRef.current = [pt];
                 setTick(t => t + 1);
             }
         }
@@ -376,6 +480,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         } else if (el.type === 'rect') {
             const { x, y } = el.params;
             return { ...el, params: { ...el.params, x: x + dx, y: y + dy } };
+        } else if (el.type === 'text') {
+            return { ...el, x: el.x + dx, y: el.y + dy };
         }
         return el;
     };
@@ -389,27 +495,33 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         const pointers = Array.from(activePointers.current.values());
         const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
 
-        // Selection Drag Move
-        if (mode === 'select' && isDraggingSelection.current && selectedId && lastDragPos.current) {
-            const pt = getLocalPoint(e.clientX, e.clientY);
-            const dx = pt.x - lastDragPos.current.x;
-            const dy = pt.y - lastDragPos.current.y;
-
-            // Update element position directly
-            setElements(prev => prev.map(el => {
-                if (el.id === selectedId) {
-                    return updateElementPosition(el, dx, dy);
-                }
-                return el;
-            }));
-
-            lastDragPos.current = pt;
-            return;
+        // Update Box Selection
+        if (selectionBox) {
+            setSelectionBox(prev => prev ? { ...prev, end: pt } : null);
+             // Auto-scroll logic could go here if near edge
+            return; 
         }
 
+        // Selection Drag Move
+        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
+             const dx = pt.x - lastDragPos.current.x;
+             const dy = pt.y - lastDragPos.current.y;
+             
+             setElements(prev => prev.map(el => {
+                 if (selectedIds.has(el.id)) {
+                     return updateElementPosition(el, dx, dy);
+                 }
+                 return el;
+             }));
+             
+             lastDragPos.current = pt;
+             return;
+        }
+
+        // Pan/Zoom
         if (isPanning.current && pointers.length === 2 && lastCenter.current) {
-            // Handle Zoom & Pan
             const newDist = dist(pointers[0], pointers[1]);
             const newCenter = mid(pointers[0], pointers[1]);
 
@@ -417,7 +529,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             let newScale = initialScale.current * scaleFactor;
             newScale = Math.min(Math.max(newScale, 0.1), 3);
 
-            // Zoom-at-point & Clamping Logic
             const scaleRatio = newScale / transform.scale;
             const dx = newCenter.x - lastCenter.current.x;
             const dy = newCenter.y - lastCenter.current.y;
@@ -425,18 +536,18 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
             let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
 
-            if (containerRef.current) {
-                const cw = containerRef.current.clientWidth;
-                const ch = containerRef.current.clientHeight;
-                const minX = cw - PAGE_SIZE.width * newScale;
-                const minY = ch - PAGE_SIZE.height * newScale;
-
-                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
-                else nextX = Math.max(0, Math.min(nextX, minX));
-
-                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
-                else nextY = Math.max(0, Math.min(nextY, minY));
-            }
+             if (containerRef.current) {
+                 const cw = containerRef.current.clientWidth;
+                 const ch = containerRef.current.clientHeight;
+                 const minX = cw - PAGE_SIZE.width * newScale;
+                 const minY = ch - PAGE_SIZE.height * newScale;
+                 
+                 if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
+                 else nextX = Math.max(0, Math.min(nextX, minX));
+                 
+                 if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
+                 else nextY = Math.max(0, Math.min(nextY, minY));
+             }
 
             setTransform({
                 scale: newScale,
@@ -447,28 +558,23 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             return;
         }
 
-        // Drawing Logic
+        // Drawing
         if (!isPanning.current && ['pen', 'eraser'].includes(mode)) {
-            // Be stricter: only draw if this pointer is the one that started it?
-            // Or just append.
-            // If Pen exists, only process Pen events for drawing?
-            if (hasPen && e.pointerType !== 'pen') return; // Ignore touch if pen is active
+            if (hasPen && e.pointerType !== 'pen') return;
 
             if (currentStrokeRef.current.length > 0) {
-                const pt = getLocalPoint(e.clientX, e.clientY);
-                // Optimization: Don't add duplicate points
                 const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
                 if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
                     currentStrokeRef.current.push(pt);
-
-                    // Direct canvas draw optimization (optional, but good for latency)
+                    
+                    // Optimization: Direct draw for feedback
                     const canvas = canvasRef.current;
                     const ctx = canvas?.getContext('2d');
                     if (ctx) {
                         ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
                         ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
                         if (mode === 'eraser') ctx.globalAlpha = 0.5;
-
+                        
                         ctx.beginPath();
                         ctx.moveTo(last.x, last.y);
                         ctx.lineTo(pt.x, pt.y);
@@ -487,6 +593,15 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         isDraggingSelection.current = false;
         lastDragPos.current = null;
 
+        // Commit Box Selection
+        if (selectionBox) {
+            // Find elements inside box
+            const found = elements.filter(el => isElementInBox(el, selectionBox));
+            const newIds = new Set(found.map(el => el.id));
+            setSelectedIds(newIds);
+            setSelectionBox(null);
+        }
+
         if (activePointers.current.size < 2) {
             isPanning.current = false;
             lastCenter.current = null;
@@ -504,19 +619,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         if (stroke.length === 0) return;
 
         if (mode === 'eraser') {
-            // Object Eraser Logic
             const threshold = eraserWidth / 2;
-
-            setElements(prev => {
-                const newElements = prev.filter(el => {
-                    if (isStrokeIntersectingElement(stroke, el, threshold)) {
-                        return false; // Remove element
-                    }
-                    return true;
-                });
-                return newElements.length !== prev.length ? newElements : prev;
-            });
-
+            setElements(prev => prev.filter(el => !isStrokeIntersectingElement(stroke, el, threshold)));
             currentStrokeRef.current = [];
             setTick(t => t + 1);
             return;
@@ -544,13 +648,38 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         setTick(t => t + 1);
     };
 
+    const commitText = () => {
+        if (!textInput) return;
+        if (textInput.text.trim()) {
+            const newEl: TextElement = {
+                type: 'text',
+                id: textInput.id || uuidv4(),
+                x: textInput.x,
+                y: textInput.y,
+                content: textInput.text,
+                fontSize: fontSize,
+                color: 'black'
+            };
+            setElements(prev => [...prev, newEl]);
+        }
+        setTextInput(null);
+    };
+
+    // Auto-focus text input
+    useEffect(() => {
+        if (textInput && textInputRef.current) {
+            textInputRef.current.focus();
+        }
+    }, [textInput]);
+
+
     const handleOCR = async () => {
         if (!canvasRef.current) return;
         setIsProcessingOCR(true);
         try {
             const text = await recognizeTextFromCanvas(canvasRef.current);
             if (text) {
-                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
+                if (confirm(`Convert handwriting to text ?\n\n"${text}"`)) {
                     setNoteContent(prev => prev + (prev ? '\n' : '') + text);
                     setElements([]);
                     setMode('text');
@@ -574,9 +703,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const selection = text.substring(start, end);
         if (!selection) return;
 
-        const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
+        const newText = text.substring(0, start) + `[[${ selection }]]` + text.substring(end);
         setNoteContent(newText);
-        setMode('view');
+        setMode('view'); // Switch to view to follow link? Or stay? Current design stays.
     };
 
     const renderContentView = () => {
@@ -599,6 +728,14 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
             return <span key={i}>{part}</span>;
         });
+    };
+
+    // Delete Selected
+    const onDelete = () => {
+        if (selectedIds.size > 0) {
+            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
+            setSelectedIds(new Set());
+        }
     };
 
 
@@ -636,14 +773,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         />
                     </div>
                 )}
-                <div className="h-6 w-px bg-border mx-2" />
-                <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
-                    <input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)} />
-                    <span>Shape</span>
-                </label>
+                {/* Delete Button for Selection */}
+                {selectedIds.size > 0 && mode === 'select' && (
+                     <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
+                )}
+
                 <div className="flex-1" />
-                {mode === 'text' && <button onClick={insertLink} className="p-2 hover:bg-muted"><LinkIcon size={18} /></button>}
-                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted"><ScanText size={18} /></button>
                 <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
             </div>
@@ -659,7 +794,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 />
             </div>
 
-            {/* Canvas Container - The Viewport */}
+            {/* Canvas Container */}
             <div
                 className="flex-1 relative overflow-hidden bg-gray-50 touch-none"
                 ref={containerRef}
@@ -668,38 +803,55 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 onPointerUp={onPointerUp}
                 onPointerLeave={onPointerUp}
             >
-                {/* Transformed Layer - Huge Page */}
+                {/* Transformed Layer */}
                 <div
                     style={{
-                        transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                        transform: `translate(${ transform.x }px, ${ transform.y }px) scale(${ transform.scale })`,
                         transformOrigin: '0 0',
                         width: PAGE_SIZE.width,
                         height: PAGE_SIZE.height,
                         willChange: 'transform',
-                        backgroundColor: 'white', // Ensure it looks like paper
-                        boxShadow: '0 0 20px rgba(0,0,0,0.1)' // Boundary visual
+                        backgroundColor: 'white',
+                        boxShadow: '0 0 20px rgba(0,0,0,0.1)'
                     }}
                 >
-                    {/* Text Content Layer */}
-                    <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono", mode === 'text' && "hidden")}>
+                    {/* Background Text Note (Legacy/Underlay) */}
+                    <div className={cn("absolute inset-0 p-6 whitespace-pre-wrap leading-loose text-lg font-mono pointer-events-none")}>
                         {renderContentView()}
                     </div>
 
-                    <textarea
-                        ref={textareaRef}
-                        className={cn("absolute inset-0 w-full h-full p-6 bg-transparent resize-none outline-none leading-loose text-lg font-mono", mode !== 'text' && "hidden")}
-                        value={noteContent}
-                        onChange={(e) => setNoteContent(e.target.value)}
-                        placeholder="Start typing..."
-                    />
+                     {/* Text Input Overlay (Transformed space) */}
+                     {textInput && (
+                        <textarea
+                            ref={textInputRef}
+                            style={{
+                                position: 'absolute',
+                                left: textInput.x,
+                                top: textInput.y - fontSize, // Adjust for baseline
+                                fontSize: fontSize + 'px',
+                                minWidth: '100px',
+                                color: 'black',
+                                background: 'transparent',
+                                border: '1px dashed #ccc',
+                                outline: 'none',
+                                resize: 'none',
+                                overflow: 'hidden',
+                                height: (fontSize * 1.5) + 'px',
+                                whiteSpace: 'nowrap'
+                            }}
+                            value={textInput.text}
+                            onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                            onPointerDown={(e) => e.stopPropagation()} // Let us type
+                        />
+                     )}
 
                     <canvas
                         ref={canvasRef}
-                        className={cn("absolute inset-0 pointer-events-none")} // Pointer events handled by container
+                        className={cn("absolute inset-0 pointer-events-none")} 
                     />
                 </div>
 
-                {/* Info Overlay (Debug/Status) */}
+                {/* Info Overlay */}
                 <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
                     {Math.round(transform.scale * 100)}%
                 </div>
