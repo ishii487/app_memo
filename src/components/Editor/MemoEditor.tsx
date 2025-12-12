@@ -150,9 +150,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 const { x, y, width, height } = el.params;
                 ctx.strokeRect(x, y, width, height);
             } else if (el.type === 'text') {
-                ctx.font = \`\${el.fontSize}px sans-serif\`;
+                ctx.font = `${el.fontSize}px sans-serif`;
                 ctx.fillText(el.content, el.x, el.y);
-                
+
                 if (isSelected) {
                     const metrics = ctx.measureText(el.content);
                     const h = el.fontSize; // Approx
@@ -167,7 +167,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         ctx.shadowBlur = 0;
         setTick(t => t + 1);
 
-    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds]); 
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds]);
 
     // 2. Render Screen
     useEffect(() => {
@@ -194,11 +194,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
             ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
             if (mode === 'eraser') ctx.globalAlpha = 0.5;
-            
+
             if (stroke.length < 2) {
-                 ctx.beginPath();
-                 ctx.moveTo(stroke[0].x, stroke[0].y);
-                 ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                ctx.stroke();
             } else {
                 ctx.beginPath();
                 ctx.moveTo(stroke[0].x, stroke[0].y);
@@ -233,7 +233,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.restore();
         }
 
-    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements, selectionBox]); 
+    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements, selectionBox]);
 
     const getLocalPoint = (client_x: number, client_y: number) => {
         if (!containerRef.current) return { x: 0, y: 0 };
@@ -271,11 +271,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             }
             if (point.x < minX - t || point.x > maxX + t || point.y < minY - t || point.y > maxY + t) return false;
             for (let i = 0; i < el.points.length - 1; i++) {
-                if (distanceToSegment(point, el.points[i], el.points[i+1]) < t) return true;
+                if (distanceToSegment(point, el.points[i], el.points[i + 1]) < t) return true;
             }
             return false;
-        } 
-        
+        }
+
         if (el.type === 'line') {
             const t = threshold + el.width / 2;
             const { start, end } = el.params;
@@ -297,9 +297,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             const p3 = { x: x + width, y: y + height };
             const p4 = { x, y: y + height };
             return distanceToSegment(point, p1, p2) < t ||
-                   distanceToSegment(point, p2, p3) < t ||
-                   distanceToSegment(point, p3, p4) < t ||
-                   distanceToSegment(point, p4, p1) < t;
+                distanceToSegment(point, p2, p3) < t ||
+                distanceToSegment(point, p3, p4) < t ||
+                distanceToSegment(point, p4, p1) < t;
         }
 
         if (el.type === 'text') {
@@ -324,7 +324,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         // Simple check: is any point inside box?
         // Or for shapes, is the bounding box intersecting? 
         // Let's do a simple check: if any of the key points are inside.
-        
+
         const isInside = (p: Point) => p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
 
         if (el.type === 'stroke') {
@@ -347,15 +347,15 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     };
 
     const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
-         for (let i = 0; i < stroke.length; i += 3) {
-             if (isPointNearElement(stroke[i], el, threshold)) return true;
-         }
-         return false;
+        for (let i = 0; i < stroke.length; i += 3) {
+            if (isPointNearElement(stroke[i], el, threshold)) return true;
+        }
+        return false;
     };
 
 
     const onPointerDown = (e: React.PointerEvent) => {
-        e.preventDefault(); 
+        e.preventDefault();
         e.stopPropagation();
 
         activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
@@ -393,11 +393,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 }
                 setTextInput({ x: pt.x, y: pt.y, text: '' });
             }
-            
+
             // Focus logic needs to happen in useEffect or after render
             return;
         }
-        
+
         // If clicking outside text input while it's open -> commit
         if (textInput && mode !== 'text') {
             commitText();
@@ -500,24 +500,24 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         // Update Box Selection
         if (selectionBox) {
             setSelectionBox(prev => prev ? { ...prev, end: pt } : null);
-             // Auto-scroll logic could go here if near edge
-            return; 
+            // Auto-scroll logic could go here if near edge
+            return;
         }
 
         // Selection Drag Move
         if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
-             const dx = pt.x - lastDragPos.current.x;
-             const dy = pt.y - lastDragPos.current.y;
-             
-             setElements(prev => prev.map(el => {
-                 if (selectedIds.has(el.id)) {
-                     return updateElementPosition(el, dx, dy);
-                 }
-                 return el;
-             }));
-             
-             lastDragPos.current = pt;
-             return;
+            const dx = pt.x - lastDragPos.current.x;
+            const dy = pt.y - lastDragPos.current.y;
+
+            setElements(prev => prev.map(el => {
+                if (selectedIds.has(el.id)) {
+                    return updateElementPosition(el, dx, dy);
+                }
+                return el;
+            }));
+
+            lastDragPos.current = pt;
+            return;
         }
 
         // Pan/Zoom
@@ -536,18 +536,18 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
             let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
 
-             if (containerRef.current) {
-                 const cw = containerRef.current.clientWidth;
-                 const ch = containerRef.current.clientHeight;
-                 const minX = cw - PAGE_SIZE.width * newScale;
-                 const minY = ch - PAGE_SIZE.height * newScale;
-                 
-                 if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
-                 else nextX = Math.max(0, Math.min(nextX, minX));
-                 
-                 if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
-                 else nextY = Math.max(0, Math.min(nextY, minY));
-             }
+            if (containerRef.current) {
+                const cw = containerRef.current.clientWidth;
+                const ch = containerRef.current.clientHeight;
+                const minX = cw - PAGE_SIZE.width * newScale;
+                const minY = ch - PAGE_SIZE.height * newScale;
+
+                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
+                else nextX = Math.max(0, Math.min(nextX, minX));
+
+                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
+                else nextY = Math.max(0, Math.min(nextY, minY));
+            }
 
             setTransform({
                 scale: newScale,
@@ -566,7 +566,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
                 if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
                     currentStrokeRef.current.push(pt);
-                    
+
                     // Optimization: Direct draw for feedback
                     const canvas = canvasRef.current;
                     const ctx = canvas?.getContext('2d');
@@ -574,7 +574,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
                         ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
                         if (mode === 'eraser') ctx.globalAlpha = 0.5;
-                        
+
                         ctx.beginPath();
                         ctx.moveTo(last.x, last.y);
                         ctx.lineTo(pt.x, pt.y);
@@ -703,7 +703,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const selection = text.substring(start, end);
         if (!selection) return;
 
-        const newText = text.substring(0, start) + `[[${ selection }]]` + text.substring(end);
+        const newText = text.substring(0, start) + `[[${selection}]]` + text.substring(end);
         setNoteContent(newText);
         setMode('view'); // Switch to view to follow link? Or stay? Current design stays.
     };
@@ -775,7 +775,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 )}
                 {/* Delete Button for Selection */}
                 {selectedIds.size > 0 && mode === 'select' && (
-                     <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
+                    <button onClick={onDelete} className="p-2 rounded bg-red-100 text-red-600 font-bold text-xs ml-2">DELETE {selectedIds.size}</button>
                 )}
 
                 <div className="flex-1" />
@@ -806,7 +806,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 {/* Transformed Layer */}
                 <div
                     style={{
-                        transform: `translate(${ transform.x }px, ${ transform.y }px) scale(${ transform.scale })`,
+                        transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                         transformOrigin: '0 0',
                         width: PAGE_SIZE.width,
                         height: PAGE_SIZE.height,
@@ -820,8 +820,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         {renderContentView()}
                     </div>
 
-                     {/* Text Input Overlay (Transformed space) */}
-                     {textInput && (
+                    {/* Text Input Overlay (Transformed space) */}
+                    {textInput && (
                         <textarea
                             ref={textInputRef}
                             style={{
@@ -843,11 +843,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                             onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
                             onPointerDown={(e) => e.stopPropagation()} // Let us type
                         />
-                     )}
+                    )}
 
                     <canvas
                         ref={canvasRef}
-                        className={cn("absolute inset-0 pointer-events-none")} 
+                        className={cn("absolute inset-0 pointer-events-none")}
                     />
                 </div>
 
