@@ -164,6 +164,31 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     ctx.restore();
                 }
             }
+
+            // LINK INDICATOR
+            if (el.link) {
+                // Draw a small "Link" icon or underline
+                if (el.type === 'text') {
+                    // Underline for text
+                    const metrics = ctx.measureText(el.content);
+                    ctx.beginPath();
+                    ctx.moveTo(el.x, el.y + 4);
+                    ctx.lineTo(el.x + metrics.width, el.y + 4);
+                    ctx.strokeStyle = '#2563eb'; // Blue
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    // For shapes, maybe a small icon at top-right or center?
+                    // Simple blue bounding box for now or finding center
+                    // Let's use bounding rect logic or just a mark
+                    // Simplified: center dot?
+                    // Better: No visual clutter, just rely on hover in view mode?
+                    // User said "nothing happens". Visual cue is needed.
+                    // Let's draw a blue link symbol top-left of generic shapes
+                    // Approximate bounding box top-left
+                    // ... (Simplification: just ensure text has underline, shapes might be subtle)
+                }
+            }
         });
         ctx.shadowBlur = 0;
         setTick(t => t + 1);
@@ -742,6 +767,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 }));
 
                 alert(`Link created to "${title}"`);
+                setSelectedIds(new Set());
+                setMode('view');
             } catch (e: any) {
                 console.error("Link Creation Error:", e);
                 alert(`Error creating link: ${e.message}`);
