@@ -336,11 +336,11 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
 
         let currentId: string | null = targetParentId;
         while (currentId) {
-            const folder = await db.folders.get(currentId);
-            if (!folder) break;
-            if (folder.parentId === folderId) return true;
-            if (folder.id === folderId) return true; // Should be covered by first check but just in case
-            currentId = folder.parentId;
+            const fetchedFolder: Folder | undefined = await db.folders.get(currentId);
+            if (!fetchedFolder) break;
+            if (fetchedFolder.parentId === folderId) return true;
+            if (fetchedFolder.id === folderId) return true; // Should be covered by first check but just in case
+            currentId = fetchedFolder.parentId;
         }
         return false;
     };
