@@ -51,7 +51,7 @@ function App() {
     );
   }
 
-  const handleLinkClick = async (title: string): Promise<'OPEN' | 'DELETE' | 'CANCEL'> => {
+  const handleLinkClick = async (title: string, targetFolderId?: string | null): Promise<'OPEN' | 'DELETE' | 'CANCEL'> => {
     const cleanTitle = title.replace(/^\[\[|\]\]$/g, '');
     const existing = await db.notes.where('title').equals(cleanTitle).first();
 
@@ -68,10 +68,13 @@ function App() {
       // Or just a primitive flow:
       if (confirm(`Linked note "${cleanTitle}" not found.\n\nClick OK to CREATE it.\nClick Cancel to DELETE the link.`)) {
         const id = uuidv4();
+        // Use provided targetFolderId (from note context) or fallback to activeFolderId (nav context)
+        const finalFolderId = targetFolderId !== undefined ? targetFolderId : activeFolderId;
+
         await db.notes.add({
           id,
           title: cleanTitle,
-          folderId: activeFolderId,
+          folderId: finalFolderId,
           content: '',
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -118,6 +121,7 @@ function App() {
     >
       {activeNoteId ? (
         <MemoEditor
+          key={activeNoteId}
           noteId={activeNoteId}
           onBack={handleBack}
           onLinkClick={handleLinkClick}

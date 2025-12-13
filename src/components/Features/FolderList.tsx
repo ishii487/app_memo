@@ -21,8 +21,7 @@ export const FolderList: React.FC<FolderListProps> = ({ activeFolderId, onSelect
             id: uuidv4(),
             title,
             parentId: null,
-            createdAt: Date.now(),
-            updatedAt: Date.now()
+            createdAt: Date.now()
         });
     };
 

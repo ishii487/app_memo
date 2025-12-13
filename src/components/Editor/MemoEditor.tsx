@@ -10,7 +10,7 @@ import { cn } from '../../lib/utils';
 interface MemoEditorProps {
     noteId: string;
     onBack: () => void;
-    onLinkClick: (title: string) => Promise<'OPEN' | 'DELETE' | 'CANCEL'>;
+    onLinkClick: (title: string, targetFolderId?: string | null) => Promise<'OPEN' | 'DELETE' | 'CANCEL'>;
     externalTitle?: string;
 }
 
@@ -706,7 +706,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     for (let i = elements.length - 1; i >= 0; i--) {
                         const el = elements[i];
                         if (el.link && isPointNearElement(pt, el, 10)) {
-                            const action = await onLinkClick(el.link);
+                            const action = await onLinkClick(el.link, currentFolderId);
                             if (action === 'DELETE') {
                                 setElements(prev => prev.map(item => {
                                     if (item.id === el.id) {
@@ -869,7 +869,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         className="text-blue-600 underline cursor-pointer hover:text-blue-800"
                         onClick={async (e) => {
                             e.stopPropagation();
-                            const action = await onLinkClick(content);
+                            const action = await onLinkClick(content, currentFolderId);
                             if (action === 'DELETE') {
                                 // Remove this link syntax from text content
                                 // This is a bit brute-force, replacing ALL instances of this specific link
