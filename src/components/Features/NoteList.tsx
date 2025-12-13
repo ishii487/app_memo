@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Folder } from '../../db/db';
-import { Plus, Folder as FolderIcon, Trash2, Star, Copy, FolderInput, X } from 'lucide-react';
+import { Plus, Folder as FolderIcon, Trash2, Star, Copy, FolderInput, X, Edit2 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
 interface NoteListProps {
@@ -176,12 +176,14 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     const handleDuplicateFolder = async (e: React.MouseEvent, folderId: string) => {
         e.stopPropagation();
         if (!confirm("フォルダとその中身をすべて複製しますか？")) return;
-        await duplicateFolderRecursive(folderId, currentFolder?.id || null); // Assuming current folder view is where we want it? No, duplicateFolderRecursive takes parentId.
-        // Wait, 'folderId' arg is the folder TO BE COPIED.
-        // 'duplicateFolderRecursive' first arg is source ID. 
-        // Second arg is the parent ID where the NEW folder will live.
-        // If we are viewing root (folderId=null in props), then parent is null.
-        // If we are viewing Folder A, and we click Duplicate on Folder B (inside A), Parent is Folder A (props.folderId).
+        await duplicateFolderRecursive(folderId, currentFolder?.id || null);
+    };
+
+    const handleRenameFolder = async (e: React.MouseEvent, folder: Folder) => {
+        e.stopPropagation();
+        const newTitle = prompt("新しいフォルダ名を入力してください:", folder.title);
+        if (newTitle === null || newTitle === folder.title) return;
+        await db.folders.update(folder.id, { title: newTitle || '新しいフォルダ', updatedAt: Date.now() });
     };
 
 
@@ -308,96 +310,8 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         setSelectedIds(new Set());
     };
 
-    const [dragOverFolderId, setDragOverFolderId] = React.useState<string | null>(null);
-
-    const handleDragStart = (e: React.DragEvent, type: 'note' | 'folder', id: string) => {
-        if (isSelectionMode) {
-            if (!selectedIds.has(id)) {
-                e.preventDefault();
-                return;
-            }
-            e.dataTransfer.setData('application/json', JSON.stringify({ type: 'bulk', ids: Array.from(selectedIds) }));
-        } else {
-            e.dataTransfer.setData('application/json', JSON.stringify({ type, id }));
-        }
-        e.dataTransfer.effectAllowed = 'move';
-    };
-
-    const handleDragOver = (e: React.DragEvent, folderId: string) => {
-        e.preventDefault(); // Necessary to allow dropping
-        e.dataTransfer.dropEffect = 'move';
-        setDragOverFolderId(folderId);
-    };
-
-    // Fix for DragLeave flickering: Only clear if we really left the drop zone. 
-    // Actually, keeping track of drag enter/leave is hard. 
-    // Using onDragOver to SET, and onDrop to CLEAR is safer.
-    // To clear when moving OUT, we can use onDragLeave on the container? 
-    // Or just setting it to null if onDragLeave fires for the specific element.
-    const handleCardDragLeave = (_e: React.DragEvent, folderId: string) => {
-        if (dragOverFolderId === folderId) {
-            setDragOverFolderId(null);
-        }
-    }
-
-
-    const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
-        e.preventDefault();
-        setDragOverFolderId(null);
-
-        const data = e.dataTransfer.getData('application/json');
-        if (!data) return;
-
-        try {
-            const parsedData = JSON.parse(data);
-
-            if (parsedData.type === 'bulk') {
-                const { ids } = parsedData;
-                const selectedIdsArray = ids as string[];
-
-                await db.transaction('rw', db.notes, db.folders, async () => {
-                    for (const id of selectedIdsArray) {
-                        if (id === targetFolderId) continue;
-
-                        // Try Note
-                        const note = await db.notes.get(id);
-                        if (note) {
-                            await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
-                            continue;
-                        }
-
-                        // Try Folder
-                        const folder = await db.folders.get(id);
-                        if (folder) {
-                            const isCircular = await checkCircularReference(id, targetFolderId);
-                            if (!isCircular) {
-                                await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
-                            }
-                        }
-                    }
-                });
-                setIsSelectionMode(false);
-                setSelectedIds(new Set());
-            } else {
-                const { type, id } = parsedData;
-                if (id === targetFolderId) return; // Cannot drop on itself
-
-                if (type === 'note') {
-                    await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
-                } else if (type === 'folder') {
-                    // Circular check
-                    const isCircular = await checkCircularReference(id, targetFolderId);
-                    if (isCircular) {
-                        alert("親フォルダをその子フォルダの中に移動することはできません。");
-                        return;
-                    }
-                    await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
-                }
-            }
-        } catch (err) {
-            console.error("Drop error", err);
-        }
-    };
+    // D&D Handlers removed to fix scroll issue and per user request. 
+    // Only kept checkCircularReference for Bulk Move.
 
     // Check if targetParentId is a descendant of folderId (or is folderId itself)
     const checkCircularReference = async (folderId: string, targetParentId: string): Promise<boolean> => {
@@ -440,12 +354,9 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     // Helper to get folder style
     const getFolderStyle = (folder: Folder) => {
         const isSelected = selectedIds.has(folder.id);
-        const isDragOver = dragOverFolderId === folder.id;
 
         let className = "group flex flex-col p-5 rounded-xl border transition-all h-32 relative overflow-hidden justify-center items-center ";
-        if (isDragOver) {
-            className += "bg-primary/20 border-primary ring-2 ring-primary scale-105 z-10 ";
-        } else if (isSelected) {
+        if (isSelected) {
             className += "bg-primary/10 border-primary ring-2 ring-primary ring-offset-2 ";
         } else {
             className += "border-border bg-secondary/50 hover:bg-secondary shadow-sm hover:shadow-md ";
@@ -503,13 +414,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                         <div
                             key={folder.id}
                             onClick={isSelectionMode ? (e) => handleSelect(e, folder.id) : () => onSelectFolder(folder.id)}
-                            className={getFolderStyle(folder) + " touch-none select-none"}
-                            draggable={!isSelectionMode || selectedIds.has(folder.id)}
-                            onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
-                            onDragOver={(e) => handleDragOver(e, folder.id)}
-                            onDragLeave={(e) => handleCardDragLeave(e, folder.id)}
-                            onDrop={(e) => handleDrop(e, folder.id)}
-                            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            className={getFolderStyle(folder)}
                         >
                             {isSelectionMode && (
                                 <div className="absolute top-3 left-3">
@@ -518,11 +423,16 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                                     </div>
                                 </div>
                             )}
-                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                                 {!isSelectionMode && (
-                                    <button onClick={(e) => handleDuplicateFolder(e, folder.id)} className="p-1.5 hover:bg-background/50 rounded-full" title="Duplicate">
-                                        <Copy size={16} />
-                                    </button>
+                                    <>
+                                        <button onClick={(e) => handleRenameFolder(e, folder)} className="p-1.5 hover:bg-background/50 rounded-full" title="Rename">
+                                            <Edit2 size={16} />
+                                        </button>
+                                        <button onClick={(e) => handleDuplicateFolder(e, folder.id)} className="p-1.5 hover:bg-background/50 rounded-full" title="Duplicate">
+                                            <Copy size={16} />
+                                        </button>
+                                    </>
                                 )}
                             </div>
                             <FolderIcon size={32} className={`mb-2 ${selectedIds.has(folder.id) ? 'text-primary' : 'opacity-50 text-foreground'}`} />
@@ -538,10 +448,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                             className={`group flex flex-col p-5 rounded-xl border transition-all h-48 relative overflow-hidden ${selectedIds.has(note.id)
                                 ? 'bg-primary/5 border-primary ring-2 ring-primary ring-offset-2'
                                 : 'border-border bg-card hover:border-primary/50 shadow-sm hover:shadow-md hover:-translate-y-1'
-                                } ${isSelectionMode ? 'cursor-pointer' : 'cursor-pointer'} touch-none select-none`}
-                            draggable={!isSelectionMode || selectedIds.has(note.id)}
-                            onDragStart={(e) => handleDragStart(e, 'note', note.id)}
-                            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                } ${isSelectionMode ? 'cursor-pointer' : 'cursor-pointer'}`}
                         >
                             {isSelectionMode && (
                                 <div className="absolute top-3 left-3 z-20">
