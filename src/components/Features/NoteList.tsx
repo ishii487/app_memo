@@ -281,7 +281,15 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     const [dragOverFolderId, setDragOverFolderId] = React.useState<string | null>(null);
 
     const handleDragStart = (e: React.DragEvent, type: 'note' | 'folder', id: string) => {
-        e.dataTransfer.setData('application/json', JSON.stringify({ type, id }));
+        if (isSelectionMode) {
+            if (!selectedIds.has(id)) {
+                e.preventDefault();
+                return;
+            }
+            e.dataTransfer.setData('application/json', JSON.stringify({ type: 'bulk', ids: Array.from(selectedIds) }));
+        } else {
+            e.dataTransfer.setData('application/json', JSON.stringify({ type, id }));
+        }
         e.dataTransfer.effectAllowed = 'move';
     };
 
@@ -311,19 +319,50 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         if (!data) return;
 
         try {
-            const { type, id } = JSON.parse(data);
-            if (id === targetFolderId) return; // Cannot drop on itself
+            const parsedData = JSON.parse(data);
 
-            if (type === 'note') {
-                await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
-            } else if (type === 'folder') {
-                // Circular check
-                const isCircular = await checkCircularReference(id, targetFolderId);
-                if (isCircular) {
-                    alert("親フォルダをその子フォルダの中に移動することはできません。");
-                    return;
+            if (parsedData.type === 'bulk') {
+                const { ids } = parsedData;
+                const selectedIdsArray = ids as string[];
+
+                await db.transaction('rw', db.notes, db.folders, async () => {
+                    for (const id of selectedIdsArray) {
+                        if (id === targetFolderId) continue;
+
+                        // Try Note
+                        const note = await db.notes.get(id);
+                        if (note) {
+                            await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
+                            continue;
+                        }
+
+                        // Try Folder
+                        const folder = await db.folders.get(id);
+                        if (folder) {
+                            const isCircular = await checkCircularReference(id, targetFolderId);
+                            if (!isCircular) {
+                                await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
+                            }
+                        }
+                    }
+                });
+                setIsSelectionMode(false);
+                setSelectedIds(new Set());
+            } else {
+                const { type, id } = parsedData;
+                if (id === targetFolderId) return; // Cannot drop on itself
+
+                if (type === 'note') {
+                    await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
+                } else if (type === 'folder') {
+                    // Circular check
+                    const isCircular = await checkCircularReference(id, targetFolderId);
+                    if (isCircular) {
+                        alert("親フォルダをその子フォルダの中に移動することはできません。");
+                        return;
+                    }
+                    await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
                 }
-                await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
             }
         } catch (err) {
             console.error("Drop error", err);
@@ -432,7 +471,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                             key={folder.id}
                             onClick={isSelectionMode ? (e) => handleSelect(e, folder.id) : () => onSelectFolder(folder.id)}
                             className={getFolderStyle(folder)}
-                            draggable={!isSelectionMode}
+                            draggable={!isSelectionMode || selectedIds.has(folder.id)}
                             onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
                             onDragOver={(e) => handleDragOver(e, folder.id)}
                             onDragLeave={(e) => handleCardDragLeave(e, folder.id)}
@@ -466,7 +505,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                                 ? 'bg-primary/5 border-primary ring-2 ring-primary ring-offset-2'
                                 : 'border-border bg-card hover:border-primary/50 shadow-sm hover:shadow-md hover:-translate-y-1'
                                 } ${isSelectionMode ? 'cursor-pointer' : 'cursor-pointer'}`}
-                            draggable={!isSelectionMode}
+                            draggable={!isSelectionMode || selectedIds.has(note.id)}
                             onDragStart={(e) => handleDragStart(e, 'note', note.id)}
                         >
                             {isSelectionMode && (
