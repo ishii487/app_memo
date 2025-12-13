@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Folder } from '../../db/db';
-import { Plus, Folder as FolderIcon, Trash2, Star, Copy } from 'lucide-react';
+import { Plus, Folder as FolderIcon, Trash2, Star, Copy, FolderInput, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
 interface NoteListProps {
@@ -278,6 +278,36 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         setSelectedIds(new Set());
     };
 
+    const [isMoveModalOpen, setIsMoveModalOpen] = React.useState(false);
+
+    const handleBulkMove = async (targetFolderId: string) => {
+        const ids = Array.from(selectedIds);
+        await db.transaction('rw', db.notes, db.folders, async () => {
+            for (const id of ids) {
+                if (id === targetFolderId) continue;
+
+                // Try Note
+                const note = await db.notes.get(id);
+                if (note) {
+                    await db.notes.update(id, { folderId: targetFolderId, updatedAt: Date.now() });
+                    continue;
+                }
+
+                // Try Folder
+                const folder = await db.folders.get(id);
+                if (folder) {
+                    const isCircular = await checkCircularReference(id, targetFolderId);
+                    if (!isCircular) {
+                        await db.folders.update(id, { parentId: targetFolderId, updatedAt: Date.now() });
+                    }
+                }
+            }
+        });
+        setIsMoveModalOpen(false);
+        setIsSelectionMode(false);
+        setSelectedIds(new Set());
+    };
+
     const [dragOverFolderId, setDragOverFolderId] = React.useState<string | null>(null);
 
     const handleDragStart = (e: React.DragEvent, type: 'note' | 'folder', id: string) => {
@@ -438,6 +468,9 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                             <button onClick={handleBulkFavorite} className="p-2 hover:bg-background/20 rounded-full" title="Toggle Favorite">
                                 <Star size={20} />
                             </button>
+                            <button onClick={() => setIsMoveModalOpen(true)} className="p-2 hover:bg-background/20 rounded-full" title="Move Selected">
+                                <FolderInput size={20} />
+                            </button>
                             <button onClick={handleBulkDelete} className="p-2 hover:bg-destructive/20 hover:text-destructive rounded-full" title="Delete Selected">
                                 <Trash2 size={20} />
                             </button>
@@ -470,12 +503,13 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                         <div
                             key={folder.id}
                             onClick={isSelectionMode ? (e) => handleSelect(e, folder.id) : () => onSelectFolder(folder.id)}
-                            className={getFolderStyle(folder)}
+                            className={getFolderStyle(folder) + " touch-none select-none"}
                             draggable={!isSelectionMode || selectedIds.has(folder.id)}
                             onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
                             onDragOver={(e) => handleDragOver(e, folder.id)}
                             onDragLeave={(e) => handleCardDragLeave(e, folder.id)}
                             onDrop={(e) => handleDrop(e, folder.id)}
+                            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         >
                             {isSelectionMode && (
                                 <div className="absolute top-3 left-3">
@@ -504,9 +538,10 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                             className={`group flex flex-col p-5 rounded-xl border transition-all h-48 relative overflow-hidden ${selectedIds.has(note.id)
                                 ? 'bg-primary/5 border-primary ring-2 ring-primary ring-offset-2'
                                 : 'border-border bg-card hover:border-primary/50 shadow-sm hover:shadow-md hover:-translate-y-1'
-                                } ${isSelectionMode ? 'cursor-pointer' : 'cursor-pointer'}`}
+                                } ${isSelectionMode ? 'cursor-pointer' : 'cursor-pointer'} touch-none select-none`}
                             draggable={!isSelectionMode || selectedIds.has(note.id)}
                             onDragStart={(e) => handleDragStart(e, 'note', note.id)}
+                            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         >
                             {isSelectionMode && (
                                 <div className="absolute top-3 left-3 z-20">
@@ -555,6 +590,39 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                 </div>
             </div>
 
+            {/* Move Modal */}
+            {isMoveModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-background rounded-xl border border-border shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+                        <div className="flex justify-between items-center p-4 border-b border-border/50">
+                            <h3 className="font-bold text-lg">移動先を選択</h3>
+                            <button onClick={() => setIsMoveModalOpen(false)} className="p-1 hover:bg-muted rounded-full">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2">
+                            {(!subFolders || subFolders.filter(f => !selectedIds.has(f.id)).length === 0) ? (
+                                <p className="p-4 text-center text-muted-foreground text-sm">移動可能なフォルダがありません</p>
+                            ) : (
+                                <div className="grid gap-1">
+                                    {subFolders
+                                        .filter(f => !selectedIds.has(f.id))
+                                        .map(folder => (
+                                            <button
+                                                key={folder.id}
+                                                onClick={() => handleBulkMove(folder.id)}
+                                                className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted transition-colors text-left"
+                                            >
+                                                <FolderIcon size={20} className="text-secondary-foreground" />
+                                                <span className="font-medium truncate">{folder.title}</span>
+                                            </button>
+                                        ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
