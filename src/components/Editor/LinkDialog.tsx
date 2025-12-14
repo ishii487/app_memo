@@ -9,9 +9,10 @@ interface LinkDialogProps {
     onSelect: (noteId: string, title: string) => void;
     onCreate: (title: string) => void;
     currentFolderId: string | null;
+    excludeNoteId?: string;
 }
 
-export const LinkDialog: React.FC<LinkDialogProps> = ({ isOpen, onClose, onSelect, onCreate, currentFolderId }) => {
+export const LinkDialog: React.FC<LinkDialogProps> = ({ isOpen, onClose, onSelect, onCreate, currentFolderId, excludeNoteId }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [newTitle, setNewTitle] = useState('');
 
@@ -30,7 +31,7 @@ export const LinkDialog: React.FC<LinkDialogProps> = ({ isOpen, onClose, onSelec
     if (!isOpen) return null;
 
     const filteredNotes = notes?.filter(n =>
-        n.title.toLowerCase().includes(searchQuery.toLowerCase())
+        n.title.toLowerCase().includes(searchQuery.toLowerCase()) && n.id !== excludeNoteId
     ) || [];
 
     const handleCreate = () => {
@@ -115,6 +116,16 @@ export const LinkDialog: React.FC<LinkDialogProps> = ({ isOpen, onClose, onSelec
                             ))
                         )}
                     </div>
+                </div>
+
+                {/* Footer (Cancel Button) */}
+                <div className="p-3 border-t bg-gray-50 flex justify-end">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 rounded text-sm font-medium text-gray-600 hover:bg-gray-200"
+                    >
+                        Cancel
+                    </button>
                 </div>
             </div>
         </div>
