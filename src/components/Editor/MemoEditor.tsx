@@ -55,7 +55,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const lastDragPos = useRef<{ x: number, y: number } | null>(null);
 
     // Force render helper
-    const [, setTick] = useState(0);
+    const [tick, setTick] = useState(0);
 
     const initialPinchDist = useRef<number>(0);
     const initialScale = useRef<number>(1);
@@ -693,10 +693,14 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
             ctx.fillStyle = el.color;
             const elWidth = el.type === 'text' ? 0 : el.width;
-            ctx.lineWidth = isSelected ? (elWidth + 2) : elWidth;
-
             if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
             ctx.shadowColor = '#3b82f6';
+
+            // Adaptive Line Width for Zoom (Minimum 0.5px visual width)
+            const minLineWidth = 0.5 / transform.scale;
+            let finalWidth = isSelected ? (elWidth + 2) : elWidth;
+            if (finalWidth < minLineWidth) finalWidth = minLineWidth;
+            ctx.lineWidth = finalWidth;
 
             if (el.type === 'stroke') {
                 drawSmoothStroke(ctx, el.points);
@@ -756,7 +760,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const stroke = currentStrokeRef.current;
         if (stroke.length > 0) {
             ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-            ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+            let strokeWidth = mode === 'eraser' ? eraserWidth : penWidth;
+            // Adaptive width for current stroke
+            const minLineWidth = 0.5 / transform.scale;
+            if (strokeWidth < minLineWidth) strokeWidth = minLineWidth;
+
+            ctx.lineWidth = strokeWidth;
             if (mode === 'eraser') ctx.globalAlpha = 0.5;
 
             if (stroke.length < 2) {
@@ -787,7 +796,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         ctx.restore(); // End Viewport Transform
 
-    }, [elements, mode, transform, selectionBox, penWidth, eraserWidth, setTick]);
+    }, [elements, mode, transform, selectionBox, penWidth, eraserWidth, tick]);
 
 
     const renderContentView = () => {
