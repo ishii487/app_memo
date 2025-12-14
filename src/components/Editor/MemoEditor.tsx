@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import { db } from '../../db/db';
 import { recognizeShape, type DrawingElement, type Point, type TextElement } from '../../utils/geometry';
 import { recognizeTextFromCanvas } from '../../utils/ocr';
+import { Quadtree } from '../../utils/Quadtree';
 import { v4 as uuidv4 } from 'uuid';
 import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -103,229 +104,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     }, [mode]);
 
-    const PAGE_SIZE = { width: 2000, height: 4000 };
+    // ----------------------------------------------------------------------
+    // RENDERING ENGINE (Viewport Based)
+    // ----------------------------------------------------------------------
 
-    // Draw canvas
-    const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    // Max canvas size (logical space)
+    const MAX_CANVAS_SIZE = { width: 20000, height: 20000 };
 
-    const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
-        if (points.length < 2) return;
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length - 1; i++) {
-            const p1 = points[i];
-            const p2 = points[i + 1];
-            const midX = (p1.x + p2.x) / 2;
-            const midY = (p1.y + p2.y) / 2;
-            ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
-        }
-        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-        ctx.stroke();
-    };
+    // --- HELPER FUNCTIONS (Must be defined before use) ---
 
-    // 1. Init/Update Buffer
-    useEffect(() => {
-        if (!bufferCanvasRef.current) {
-            bufferCanvasRef.current = document.createElement('canvas');
-            bufferCanvasRef.current.width = PAGE_SIZE.width;
-            bufferCanvasRef.current.height = PAGE_SIZE.height;
-        }
-        const buffer = bufferCanvasRef.current;
-        const ctx = buffer.getContext('2d');
-        if (!ctx) return;
-
-        ctx.clearRect(0, 0, buffer.width, buffer.height);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        elements.forEach(el => {
-            const isSelected = selectedIds.has(el.id);
-            ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
-            ctx.fillStyle = el.color; // For textMainly
-            const elWidth = el.type === 'text' ? 0 : el.width;
-            ctx.lineWidth = isSelected ? (elWidth + 2) : elWidth;
-            if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
-            ctx.shadowColor = '#3b82f6';
-
-            if (el.type === 'stroke') {
-                drawSmoothStroke(ctx, el.points);
-            } else if (el.type === 'line') {
-                const { start, end } = el.params;
-                ctx.beginPath();
-                ctx.moveTo(start.x, start.y);
-                ctx.lineTo(end.x, end.y);
-                ctx.stroke();
-            } else if (el.type === 'circle') {
-                const { x, y, radius } = el.params;
-                ctx.beginPath();
-                ctx.arc(x, y, radius, 0, Math.PI * 2);
-                ctx.stroke();
-            } else if (el.type === 'rect') {
-                const { x, y, width, height } = el.params;
-                ctx.strokeRect(x, y, width, height);
-            } else if (el.type === 'text') {
-                ctx.font = `${el.fontSize}px sans-serif`;
-                // Ensure text color is black for visibility
-                ctx.fillStyle = 'black';
-                ctx.fillText(el.content, el.x, el.y);
-
-                if (isSelected) {
-                    const metrics = ctx.measureText(el.content);
-                    const h = el.fontSize; // Approx
-                    ctx.save();
-                    ctx.strokeStyle = '#3b82f6';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(el.x - 2, el.y - h, metrics.width + 4, h + 4);
-                    ctx.restore();
-                }
-            }
-
-            // VISUALS: LINK INDICATOR
-            // In View Mode: Color linked elements Light Blue to indicate clickability
-            // In Edit Mode: Keep original color to avoid confusion? Or show subtle indicator?
-            // User request: "Remove L, make linked CHARACTERS light blue in VIEW MODE"
-            if (el.link && mode === 'view') {
-                const LINK_COLOR = '#0ea5e9'; // Light Blue (Tailwind Sky-500)
-
-                if (el.type === 'text') {
-                    ctx.fillStyle = LINK_COLOR;
-                    ctx.fillText(el.content, el.x, el.y);
-                    // Blue Underline
-                    const metrics = ctx.measureText(el.content);
-                    ctx.beginPath();
-                    ctx.moveTo(el.x, el.y + 4);
-                    ctx.lineTo(el.x + metrics.width, el.y + 4);
-                    ctx.strokeStyle = LINK_COLOR;
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                } else if (el.type === 'line') {
-                    // Re-draw with blue
-                    const { start, end } = el.params;
-                    ctx.beginPath();
-                    ctx.moveTo(start.x, start.y);
-                    ctx.lineTo(end.x, end.y);
-                    ctx.strokeStyle = LINK_COLOR;
-                    ctx.stroke();
-                } else if (el.type === 'circle') {
-                    const { x, y, radius } = el.params;
-                    ctx.beginPath();
-                    ctx.arc(x, y, radius, 0, Math.PI * 2);
-                    ctx.strokeStyle = LINK_COLOR;
-                    ctx.stroke();
-                } else if (el.type === 'rect') {
-                    const { x, y, width, height } = el.params;
-                    ctx.strokeStyle = LINK_COLOR;
-                    ctx.strokeRect(x, y, width, height);
-                } else if (el.type === 'stroke') {
-                    // Re-draw stroke
-                    ctx.beginPath();
-                    const points = el.points;
-                    if (points.length > 0) {
-                        ctx.moveTo(points[0].x, points[0].y);
-                        // Using quadratic curves for smoothness (simplified here to match original logic if it used helpers)
-                        // Actually, reusing the helper 'drawSmoothStroke' but with overridden context strokeStyle would be cleaner,
-                        // but drawSmoothStroke might assume black context? 
-                        // Let's manually set strokeStyle BEFORE calling draw helper?
-                        // No, the original draw loop sets strokeStyle per element if we edited it.
-                        // But here we are iterating. 
-                        // To avoid code duplication, we could just set the Style at the TOP of the loop based on mode/link.
-                        // But let's just override here for clarity.
-                        ctx.strokeStyle = LINK_COLOR;
-                        // Simple line connection for now or duplicate logic
-                        for (let i = 1; i < points.length; i++) {
-                            // Simple line join for now to ensure it works
-                            ctx.lineTo(points[i].x, points[i].y);
-                        }
-                        ctx.stroke();
-                    }
-                }
-            } else if (el.link) {
-                // In non-view mode, show underline for text but no 'L' for shapes as requested?
-                // Or user just said "remove L". Assume standard rendering (black) + underline for text is fine.
-                if (el.type === 'text') {
-                    // Keep the blue underline even in edit mode so they know it's a link?
-                    // User said "In VIEW MODE make characters light blue". Implies Edit mode is normal.
-                    const metrics = ctx.measureText(el.content);
-                    ctx.beginPath();
-                    ctx.moveTo(el.x, el.y + 4);
-                    ctx.lineTo(el.x + metrics.width, el.y + 4);
-                    ctx.strokeStyle = '#2563eb'; // Darker blue for edit mode underline
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-            }
-        });
-        ctx.shadowBlur = 0;
-        setTick(t => t + 1);
-
-    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds, mode]); // Added mode dependency
-
-    // 2. Render Screen
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        const buffer = bufferCanvasRef.current;
-        if (!canvas || !buffer) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
-            canvas.width = PAGE_SIZE.width;
-            canvas.height = PAGE_SIZE.height;
-        }
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        ctx.drawImage(buffer, 0, 0);
-
-        // Draw current stroke
-        const stroke = currentStrokeRef.current;
-        if (stroke.length > 0) {
-            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-            ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
-            if (mode === 'eraser') ctx.globalAlpha = 0.5;
-
-            if (stroke.length < 2) {
-                ctx.beginPath();
-                ctx.moveTo(stroke[0].x, stroke[0].y);
-                ctx.stroke();
-            } else {
-                ctx.beginPath();
-                ctx.moveTo(stroke[0].x, stroke[0].y);
-                for (let i = 1; i < stroke.length - 1; i++) {
-                    const p1 = stroke[i];
-                    const p2 = stroke[i + 1];
-                    const midX = (p1.x + p2.x) / 2;
-                    const midY = (p1.y + p2.y) / 2;
-                    ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
-                }
-                ctx.lineTo(stroke[stroke.length - 1].x, stroke[stroke.length - 1].y);
-                ctx.stroke();
-            }
-            ctx.globalAlpha = 1.0;
-        }
-
-        // Draw Selection Box
-        if (selectionBox) {
-            const { start, end } = selectionBox;
-            const x = Math.min(start.x, end.x);
-            const y = Math.min(start.y, end.y);
-            const w = Math.abs(end.x - start.x);
-            const h = Math.abs(end.y - start.y);
-
-            ctx.save();
-            ctx.strokeStyle = '#3b82f6';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([5, 5]);
-            ctx.strokeRect(x, y, w, h);
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
-            ctx.fillRect(x, y, w, h);
-            ctx.restore();
-        }
-
-    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements, selectionBox]);
-
+    // Coordinate conversion
     const getLocalPoint = (client_x: number, client_y: number) => {
         if (!containerRef.current) return { x: 0, y: 0 };
         const rect = containerRef.current.getBoundingClientRect();
@@ -336,6 +124,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return { x, y };
     };
 
+    // Math helpers
     const dist = (p1: { x: number, y: number }, p2: { x: number, y: number }) => {
         return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
     };
@@ -352,6 +141,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return Math.sqrt(Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2));
     };
 
+    // Hit testing
     const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
         if (el.type === 'stroke') {
             const t = threshold + el.width / 2;
@@ -395,7 +185,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         if (el.type === 'text') {
             // Check bounding box
-            // Approximate width
             const w = el.content.length * el.fontSize * 0.6;
             const h = el.fontSize;
             // Hit test: origin is bottom-left
@@ -411,10 +200,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         const y1 = Math.min(box.start.y, box.end.y);
         const y2 = Math.max(box.start.y, box.end.y);
 
-        // Simple check: is any point inside box?
-        // Or for shapes, is the bounding box intersecting? 
-        // Let's do a simple check: if any of the key points are inside.
-
         const isInside = (p: Point) => p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
 
         if (el.type === 'stroke') {
@@ -424,14 +209,12 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             return isInside(el.params.start) || isInside(el.params.end);
         }
         if (el.type === 'circle') {
-            // Check center
             return isInside({ x: el.params.x, y: el.params.y });
         }
         if (el.type === 'rect') {
             return isInside({ x: el.params.x, y: el.params.y });
         }
         if (el.type === 'text') {
-            // Text origin is bottom-left, check origin
             return isInside({ x: el.x, y: el.y - el.fontSize / 2 });
         }
         return false;
@@ -444,115 +227,23 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return false;
     };
 
-
-    const onPointerDown = (e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-        e.currentTarget.setPointerCapture(e.pointerId);
-
-        const pointers = Array.from(activePointers.current.values());
-        const hasPen = pointers.some(p => p.type === 'pen');
-        const pt = getLocalPoint(e.clientX, e.clientY);
-
-        // TEXT MODE: Create or Edit
-        // Priority: Hit existing text first
-        if (mode === 'text' && pointers.length === 1) {
-            let hitText = null;
-            // Iterate in reverse to hit top-most first
-            for (let i = elements.length - 1; i >= 0; i--) {
-                const el = elements[i];
-                if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
-                    hitText = el;
-                    break;
-                }
-            }
-
-            if (hitText) {
-                // Edit existing
-                setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
-                setElements(prev => prev.filter(e => e.id !== hitText!.id));
-            } else {
-                // Create new
-                // If input already open, commit it first
-                if (textInput) {
-                    commitText();
-                }
-                // Small delay to prevent immediate close if we just clicked? 
-                // No, just open new input at new pos
-                setTextInput({ x: pt.x, y: pt.y, text: '' });
-            }
-            return;
+    // Drawing Helper
+    const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const midX = (p1.x + p2.x) / 2;
+            const midY = (p1.y + p2.y) / 2;
+            ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
         }
-
-        // If clicking outside text input while it's open -> commit
-        if (textInput) {
-            commitText();
-            return; // STOP processing to prevent immediate new input creation
-        }
-
-
-        // SELECTION MODE
-        if (mode === 'select' && pointers.length === 1) {
-            // Check Hit
-            let foundId: string | null = null;
-            for (let i = elements.length - 1; i >= 0; i--) {
-                if (isPointNearElement(pt, elements[i], 10)) {
-                    foundId = elements[i].id;
-                    break;
-                }
-            }
-
-            if (foundId) {
-                // If clicking a selected item, start dragging ALL selected
-                // But if we clicked an item that is NOT in the current selection, selection should reset to just this item
-                if (selectedIds.has(foundId)) {
-                    // Start dragging current selection
-                } else {
-                    // New single selection
-                    setSelectedIds(new Set([foundId]));
-                }
-                isDraggingSelection.current = true;
-                lastDragPos.current = pt;
-            } else {
-                // Clicked Empty Space
-                // Clear selection
-                setSelectedIds(new Set());
-                // Start Box Selection
-                setSelectionBox({ start: pt, end: pt });
-            }
-
-            isPanning.current = false; // Override pan
-            return;
-        }
-
-        if (hasPen && e.pointerType === 'pen') {
-            if (['pen', 'eraser'].includes(mode)) {
-                isPanning.current = false;
-                currentStrokeRef.current = [pt];
-                setTick(t => t + 1);
-            }
-            return;
-        }
-
-        // Standard Pan/Zoom gestures
-        if (pointers.length === 2 && !hasPen) {
-            isPanning.current = true;
-            currentStrokeRef.current = [];
-            setTick(t => t + 1);
-            initialPinchDist.current = dist(pointers[0], pointers[1]);
-            initialScale.current = transform.scale;
-            lastCenter.current = mid(pointers[0], pointers[1]);
-        } else if (pointers.length === 1 && !hasPen) {
-            if (['pen', 'eraser'].includes(mode)) {
-                isPanning.current = false;
-                currentStrokeRef.current = [pt];
-                setTick(t => t + 1);
-            }
-        }
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        ctx.stroke();
     };
 
+    // State Updates
     const updateElementPosition = (el: DrawingElement, dx: number, dy: number): DrawingElement => {
         if (el.type === 'stroke') {
             return { ...el, points: el.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
@@ -571,158 +262,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return el;
     };
 
-    const onPointerMove = (e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (!activePointers.current.has(e.pointerId)) return;
-        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-
-        const pointers = Array.from(activePointers.current.values());
-        const hasPen = pointers.some(p => p.type === 'pen');
-        const pt = getLocalPoint(e.clientX, e.clientY);
-
-        // Update Box Selection
-        if (selectionBox) {
-            setSelectionBox(prev => prev ? { ...prev, end: pt } : null);
-            // Auto-scroll logic could go here if near edge
-            return;
-        }
-
-        // Selection Drag Move
-        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
-            const dx = pt.x - lastDragPos.current.x;
-            const dy = pt.y - lastDragPos.current.y;
-
-            setElements(prev => prev.map(el => {
-                if (selectedIds.has(el.id)) {
-                    return updateElementPosition(el, dx, dy);
-                }
-                return el;
-            }));
-
-            lastDragPos.current = pt;
-            return;
-        }
-
-        // Pan/Zoom
-        if (isPanning.current && pointers.length === 2 && lastCenter.current) {
-            const newDist = dist(pointers[0], pointers[1]);
-            const newCenter = mid(pointers[0], pointers[1]);
-
-            const scaleFactor = newDist / initialPinchDist.current;
-            let newScale = initialScale.current * scaleFactor;
-            newScale = Math.min(Math.max(newScale, 0.1), 3);
-
-            const scaleRatio = newScale / transform.scale;
-            const dx = newCenter.x - lastCenter.current.x;
-            const dy = newCenter.y - lastCenter.current.y;
-
-            let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
-            let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
-
-            if (containerRef.current) {
-                const cw = containerRef.current.clientWidth;
-                const ch = containerRef.current.clientHeight;
-                const minX = cw - PAGE_SIZE.width * newScale;
-                const minY = ch - PAGE_SIZE.height * newScale;
-
-                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
-                else nextX = Math.max(0, Math.min(nextX, minX));
-
-                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
-                else nextY = Math.max(0, Math.min(nextY, minY));
-            }
-
-            setTransform({
-                scale: newScale,
-                x: nextX,
-                y: nextY
-            });
-            lastCenter.current = newCenter;
-            return;
-        }
-
-        // Drawing
-        if (!isPanning.current && ['pen', 'eraser'].includes(mode)) {
-            if (hasPen && e.pointerType !== 'pen') return;
-
-            if (currentStrokeRef.current.length > 0) {
-                const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
-                if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
-                    currentStrokeRef.current.push(pt);
-
-                    // Optimization: Direct draw for feedback
-                    const canvas = canvasRef.current;
-                    const ctx = canvas?.getContext('2d');
-                    if (ctx) {
-                        ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-                        ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
-                        if (mode === 'eraser') ctx.globalAlpha = 0.5;
-
-                        ctx.beginPath();
-                        ctx.moveTo(last.x, last.y);
-                        ctx.lineTo(pt.x, pt.y);
-                        ctx.stroke();
-                        if (mode === 'eraser') ctx.globalAlpha = 1.0;
-                    }
-                }
-            }
-        }
-    };
-
-    const onPointerUp = (e: React.PointerEvent) => {
-        activePointers.current.delete(e.pointerId);
-        e.currentTarget.releasePointerCapture(e.pointerId);
-
-        isDraggingSelection.current = false;
-        lastDragPos.current = null;
-
-        // Commit Box Selection
-        if (selectionBox) {
-            // Find elements inside box
-            const found = elements.filter(el => isElementInBox(el, selectionBox));
-            const newIds = new Set(found.map(el => el.id));
-            setSelectedIds(newIds);
-            setSelectionBox(null);
-        }
-
-        if (activePointers.current.size < 2) {
-            isPanning.current = false;
-            lastCenter.current = null;
-        }
-
-        if (currentStrokeRef.current.length > 0) {
-            if (e.pointerType === 'pen' || activePointers.current.size === 0) {
-                commitStroke();
-            }
-        } else {
-            // Check for Link Navigation (Tap in View Mode)
-            if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
-                const pt = getLocalPoint(e.clientX, e.clientY);
-                // Check handlers async
-                (async () => {
-                    // Find top-most element with link
-                    for (let i = elements.length - 1; i >= 0; i--) {
-                        const el = elements[i];
-                        if (el.link && isPointNearElement(pt, el, 10)) {
-                            const action = await onLinkClick(el.link, currentFolderId);
-                            if (action === 'DELETE') {
-                                setElements(prev => prev.map(item => {
-                                    if (item.id === el.id) {
-                                        const { link, ...rest } = item;
-                                        return rest; // Remove link property
-                                    }
-                                    return item;
-                                }));
-                            }
-                            break;
-                        }
-                    }
-                })();
-            }
-        }
-    };
+    // --- ACTIONS (Defined before use) ---
 
     const commitStroke = () => {
         const stroke = currentStrokeRef.current;
@@ -774,14 +314,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
         setTextInput(null);
     };
-
-    // Auto-focus text input
-    useEffect(() => {
-        if (textInput && textInputRef.current) {
-            textInputRef.current.focus();
-        }
-    }, [textInput]);
-
 
     const handleOCR = async () => {
         if (!canvasRef.current) return;
@@ -856,6 +388,406 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         alert("Please select an element to link.");
     };
 
+    const onDelete = () => {
+        if (selectedIds.size > 0) {
+            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
+            setSelectedIds(new Set());
+        }
+    };
+
+
+    // --- EVENT HANDLERS ---
+
+    const onPointerDown = (e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+        e.currentTarget.setPointerCapture(e.pointerId);
+
+        const pointers = Array.from(activePointers.current.values());
+        const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
+
+        // TEXT MODE: Create or Edit
+        if (mode === 'text' && pointers.length === 1) {
+            let hitText = null;
+            for (let i = elements.length - 1; i >= 0; i--) {
+                const el = elements[i];
+                if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
+                    hitText = el;
+                    break;
+                }
+            }
+
+            if (hitText) {
+                setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
+                setElements(prev => prev.filter(e => e.id !== hitText!.id));
+            } else {
+                if (textInput) commitText();
+                setTextInput({ x: pt.x, y: pt.y, text: '' });
+            }
+            return;
+        }
+
+        if (textInput) {
+            commitText();
+            return;
+        }
+
+        // SELECTION MODE
+        if (mode === 'select' && pointers.length === 1) {
+            let foundId: string | null = null;
+            for (let i = elements.length - 1; i >= 0; i--) {
+                if (isPointNearElement(pt, elements[i], 10)) {
+                    foundId = elements[i].id;
+                    break;
+                }
+            }
+
+            if (foundId) {
+                if (selectedIds.has(foundId)) {
+                    // dragged
+                } else {
+                    setSelectedIds(new Set([foundId]));
+                }
+                isDraggingSelection.current = true;
+                lastDragPos.current = pt;
+            } else {
+                setSelectedIds(new Set());
+                setSelectionBox({ start: pt, end: pt });
+            }
+            isPanning.current = false;
+            return;
+        }
+
+        if (hasPen && e.pointerType === 'pen') {
+            if (['pen', 'eraser'].includes(mode)) {
+                isPanning.current = false;
+                currentStrokeRef.current = [pt];
+                setTick(t => t + 1);
+            }
+            return;
+        }
+
+        if (pointers.length === 2 && !hasPen) {
+            isPanning.current = true;
+            currentStrokeRef.current = [];
+            setTick(t => t + 1);
+            initialPinchDist.current = dist(pointers[0], pointers[1]);
+            initialScale.current = transform.scale;
+            lastCenter.current = mid(pointers[0], pointers[1]);
+        } else if (pointers.length === 1 && !hasPen) {
+            if (['pen', 'eraser'].includes(mode)) {
+                isPanning.current = false;
+                currentStrokeRef.current = [pt];
+                setTick(t => t + 1);
+            }
+        }
+    };
+
+    const onPointerMove = (e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (!activePointers.current.has(e.pointerId)) return;
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+
+        const pointers = Array.from(activePointers.current.values());
+        const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
+
+        if (selectionBox) {
+            setSelectionBox(prev => prev ? { ...prev, end: pt } : null);
+            return;
+        }
+
+        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
+            const dx = pt.x - lastDragPos.current.x;
+            const dy = pt.y - lastDragPos.current.y;
+            setElements(prev => prev.map(el => {
+                if (selectedIds.has(el.id)) return updateElementPosition(el, dx, dy);
+                return el;
+            }));
+            lastDragPos.current = pt;
+            return;
+        }
+
+        // Pan/Zoom
+        if (isPanning.current && pointers.length === 2 && lastCenter.current) {
+            const newDist = dist(pointers[0], pointers[1]);
+            const newCenter = mid(pointers[0], pointers[1]);
+
+            const scaleFactor = newDist / initialPinchDist.current;
+            let newScale = initialScale.current * scaleFactor;
+            newScale = Math.min(Math.max(newScale, 0.1), 5);
+
+            const scaleRatio = newScale / transform.scale;
+            const dx = newCenter.x - lastCenter.current.x;
+            const dy = newCenter.y - lastCenter.current.y;
+
+            let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
+            let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
+
+            if (containerRef.current) {
+                const cw = containerRef.current.clientWidth;
+                const ch = containerRef.current.clientHeight;
+                const contentW = MAX_CANVAS_SIZE.width * newScale;
+                const contentH = MAX_CANVAS_SIZE.height * newScale;
+                const minX = cw - contentW;
+                const minY = ch - contentH;
+
+                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
+                else nextX = Math.max(0, Math.min(nextX, minX));
+
+                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
+                else nextY = Math.max(0, Math.min(nextY, minY));
+            }
+
+            setTransform({
+                scale: newScale,
+                x: nextX,
+                y: nextY
+            });
+            lastCenter.current = newCenter;
+            return;
+        }
+
+        // Drawing
+        if (!isPanning.current && ['pen', 'eraser'].includes(mode)) {
+            if (hasPen && e.pointerType !== 'pen') return;
+
+            if (currentStrokeRef.current.length > 0) {
+                const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
+                if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
+                    currentStrokeRef.current.push(pt);
+                    setTick(t => t + 1); // Trigger render loop
+                }
+            }
+        }
+    };
+
+    const onPointerUp = (e: React.PointerEvent) => {
+        activePointers.current.delete(e.pointerId);
+        e.currentTarget.releasePointerCapture(e.pointerId);
+
+        isDraggingSelection.current = false;
+        lastDragPos.current = null;
+
+        if (selectionBox) {
+            const found = elements.filter(el => isElementInBox(el, selectionBox));
+            const newIds = new Set(found.map(el => el.id));
+            setSelectedIds(newIds);
+            setSelectionBox(null);
+        }
+
+        if (activePointers.current.size < 2) {
+            isPanning.current = false;
+            lastCenter.current = null;
+        }
+
+        if (currentStrokeRef.current.length > 0) {
+            if (e.pointerType === 'pen' || activePointers.current.size === 0) {
+                commitStroke();
+            }
+        } else {
+            // Check for Link Navigation (Tap in View Mode)
+            if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
+                const pt = getLocalPoint(e.clientX, e.clientY);
+                (async () => {
+                    for (let i = elements.length - 1; i >= 0; i--) {
+                        const el = elements[i];
+                        if (el.link && isPointNearElement(pt, el, 10)) {
+                            const action = await onLinkClick(el.link, currentFolderId);
+                            if (action === 'DELETE') {
+                                setElements(prev => prev.map(item => {
+                                    if (item.id === el.id) {
+                                        const { link, ...rest } = item;
+                                        return rest;
+                                    }
+                                    return item;
+                                }));
+                            }
+                            break;
+                        }
+                    }
+                })();
+            }
+        }
+    };
+
+
+    // --- EFFECTS ---
+
+    // Update screen canvas size on resize
+    useEffect(() => {
+        const handleResize = () => {
+            if (containerRef.current && canvasRef.current) {
+                const rect = containerRef.current.getBoundingClientRect();
+                canvasRef.current.width = rect.width;
+                canvasRef.current.height = rect.height;
+                setTick(t => t + 1); // Force redraw
+            }
+        };
+        window.addEventListener('resize', handleResize);
+        handleResize(); // Init
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+
+    // Quadtree Ref
+    // Initialize with MAX_CANVAS_SIZE or sufficiently large bounds
+    // Since MAX_CANVAS_SIZE is 20000x20000, we use that.
+    const quadtreeRef = useRef<Quadtree>(new Quadtree({ x: 0, y: 0, width: 20000, height: 20000 }));
+
+    // Rebuild Quadtree when elements change
+    useEffect(() => {
+        // We could optimize this to not rebuild entirely if we swtiched to mutable elements or action-based updates
+        // But for now, full rebuild is safe.
+        const qt = new Quadtree({ x: 0, y: 0, width: 20000, height: 20000 });
+        elements.forEach(el => qt.insert(el));
+        quadtreeRef.current = qt;
+    }, [elements]);
+
+    // Auto-focus text input
+    useEffect(() => {
+        if (textInput && textInputRef.current) {
+            textInputRef.current.focus();
+        }
+    }, [textInput]);
+
+
+    // MAIN RENDER LOOP
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Clear Screen
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Apply Viewport Transform
+        ctx.save();
+        ctx.setTransform(transform.scale, 0, 0, transform.scale, transform.x, transform.y);
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Calculate Viewport AABB (Logical Coordinates)
+        // Screen (0,0) -> Logical (vx, vy)
+        const viewport = {
+            x: -transform.x / transform.scale,
+            y: -transform.y / transform.scale,
+            width: canvas.width / transform.scale,
+            height: canvas.height / transform.scale
+        };
+
+        // Query Quadtree
+        // const visibleElements = elements; // Old way
+        const visibleElements = quadtreeRef.current.query(viewport);
+
+        // Draw Visible Elements
+        visibleElements.forEach(el => {
+            const isSelected = selectedIds.has(el.id);
+            ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
+            ctx.fillStyle = el.color;
+            const elWidth = el.type === 'text' ? 0 : el.width;
+            ctx.lineWidth = isSelected ? (elWidth + 2) : elWidth;
+
+            if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
+            ctx.shadowColor = '#3b82f6';
+
+            if (el.type === 'stroke') {
+                drawSmoothStroke(ctx, el.points);
+            } else if (el.type === 'line') {
+                const { start, end } = el.params;
+                ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+            } else if (el.type === 'circle') {
+                const { x, y, radius } = el.params;
+                ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke();
+            } else if (el.type === 'rect') {
+                const { x, y, width, height } = el.params;
+                ctx.strokeRect(x, y, width, height);
+            } else if (el.type === 'text') {
+                ctx.font = `${el.fontSize}px sans-serif`;
+                ctx.fillStyle = 'black';
+                ctx.fillText(el.content, el.x, el.y);
+
+                if (isSelected) {
+                    const metrics = ctx.measureText(el.content);
+                    const h = el.fontSize;
+                    ctx.save();
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(el.x - 2, el.y - h, metrics.width + 4, h + 4);
+                    ctx.restore();
+                }
+            }
+
+            // Link Indicators
+            if (el.link && mode === 'view') {
+                const LINK_COLOR = '#0ea5e9';
+                if (el.type === 'text') {
+                    ctx.fillStyle = LINK_COLOR;
+                    ctx.fillText(el.content, el.x, el.y);
+                    // Underline
+                    const metrics = ctx.measureText(el.content);
+                    ctx.beginPath(); ctx.moveTo(el.x, el.y + 4); ctx.lineTo(el.x + metrics.width, el.y + 4);
+                    ctx.strokeStyle = LINK_COLOR; ctx.lineWidth = 2; ctx.stroke();
+                } else {
+                    ctx.save();
+                    ctx.strokeStyle = LINK_COLOR;
+                    if (el.type === 'rect') ctx.strokeRect(el.params.x, el.params.y, el.params.width, el.params.height);
+                    else if (el.type === 'circle') { ctx.beginPath(); ctx.arc(el.params.x, el.params.y, el.params.radius, 0, Math.PI * 2); ctx.stroke(); }
+                    else if (el.type === 'line') { ctx.beginPath(); ctx.moveTo(el.params.start.x, el.params.start.y); ctx.lineTo(el.params.end.x, el.params.end.y); ctx.stroke(); }
+                    else if (el.type === 'stroke') drawSmoothStroke(ctx, el.points);
+                    ctx.restore();
+                }
+            } else if (el.link && el.type === 'text') {
+                // Edit Mode Underline
+                const metrics = ctx.measureText(el.content);
+                ctx.beginPath(); ctx.moveTo(el.x, el.y + 4); ctx.lineTo(el.x + metrics.width, el.y + 4);
+                ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.stroke();
+            }
+        });
+
+        // Draw Current Stroke
+        const stroke = currentStrokeRef.current;
+        if (stroke.length > 0) {
+            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
+            ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+            if (mode === 'eraser') ctx.globalAlpha = 0.5;
+
+            if (stroke.length < 2) {
+                ctx.beginPath(); ctx.moveTo(stroke[0].x, stroke[0].y); ctx.stroke();
+            } else {
+                drawSmoothStroke(ctx, stroke);
+            }
+            ctx.globalAlpha = 1.0;
+        }
+
+        // Draw Selection Box
+        if (selectionBox) {
+            const { start, end } = selectionBox;
+            const x = Math.min(start.x, end.x);
+            const y = Math.min(start.y, end.y);
+            const w = Math.abs(end.x - start.x);
+            const h = Math.abs(end.y - start.y);
+
+            ctx.save();
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 1 / transform.scale;
+            ctx.setLineDash([5 / transform.scale, 5 / transform.scale]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+        }
+
+        ctx.restore(); // End Viewport Transform
+
+    }, [elements, mode, transform, selectionBox, penWidth, eraserWidth, setTick]);
 
 
     const renderContentView = () => {
@@ -871,11 +803,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                             e.stopPropagation();
                             const action = await onLinkClick(content, currentFolderId);
                             if (action === 'DELETE') {
-                                // Remove this link syntax from text content
-                                // This is a bit brute-force, replacing ALL instances of this specific link
-                                // But since there's no unique ID for text parts, it's the safest assumption
                                 const linkStr = `[[${content}]]`;
-                                setNoteContent(prev => prev.replaceAll(linkStr, content)); // Keep content, remove brackets
+                                setNoteContent(prev => prev.replaceAll(linkStr, content));
                             }
                         }}
                     >
@@ -887,20 +816,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         });
     };
 
-    // Delete Selected
-    const onDelete = () => {
-        if (selectedIds.size > 0) {
-            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
-            setSelectedIds(new Set());
-        }
-    };
-
 
     return (
         <div className="flex flex-col h-full bg-white relative overflow-hidden">
-            {/* Update Toast */}
-
-
             {/* Toolbar (Fixed) */}
             <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
@@ -974,16 +892,27 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 onPointerUp={onPointerUp}
                 onPointerLeave={onPointerUp}
             >
-                {/* Transformed Layer */}
+                {/* 
+                   Canvas Layer 
+                   Now occupies full container, handles all vector rendering with viewport transform
+                */}
+                <canvas
+                    ref={canvasRef}
+                    className="absolute inset-0 pointer-events-none"
+                    style={{ width: '100%', height: '100%' }}
+                />
+
+                {/* 
+                   DOM Layer (Transform applied via CSS)
+                */}
                 <div
                     style={{
                         transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                         transformOrigin: '0 0',
-                        width: PAGE_SIZE.width,
-                        height: PAGE_SIZE.height,
+                        width: MAX_CANVAS_SIZE.width,
+                        height: MAX_CANVAS_SIZE.height,
                         willChange: 'transform',
-                        backgroundColor: 'white',
-                        boxShadow: '0 0 20px rgba(0,0,0,0.1)'
+                        pointerEvents: 'none' // Let clicks pass to container, but enable for inputs
                     }}
                 >
                     {/* Background Text Note (Legacy/Underlay) */}
@@ -991,22 +920,14 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         {renderContentView()}
                     </div>
 
-
-                    <canvas
-                        ref={canvasRef}
-                        className={cn("absolute inset-0 pointer-events-none")}
-                    />
-
-                    {/* Text Input Overlay (Transformed space) */}
-                    {/* Move AFTER the canvas to ensure it is on top for clicks, but canvas has pointer-events-none so it is fine either way. 
-                         However, visually, we want text input on top of strokes. */}
+                    {/* Text Input Overlay */}
                     {textInput && (
                         <textarea
                             ref={textInputRef}
                             style={{
                                 position: 'absolute',
                                 left: textInput.x,
-                                top: textInput.y - fontSize, // Adjust for baseline to match canvas text
+                                top: textInput.y - fontSize,
                                 fontSize: fontSize + 'px',
                                 minWidth: '100px',
                                 color: 'black',
@@ -1017,19 +938,20 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                                 overflow: 'hidden',
                                 height: (fontSize * 1.5) + 'px',
                                 whiteSpace: 'nowrap',
-                                zIndex: 100, // Explicit High Z-Index
+                                zIndex: 100,
                                 fontFamily: 'sans-serif',
-                                lineHeight: '1'
+                                lineHeight: '1',
+                                pointerEvents: 'auto' // Re-enable pointer events for input
                             }}
                             value={textInput.text}
                             onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                            onPointerDown={(e) => e.stopPropagation()} // Let us type
+                            onPointerDown={(e) => e.stopPropagation()}
                         />
                     )}
                 </div>
 
                 {/* Info Overlay */}
-                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
+                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none z-50">
                     {Math.round(transform.scale * 100)}%
                 </div>
             </div>
