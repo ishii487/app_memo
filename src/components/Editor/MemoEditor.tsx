@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { LinkDialog } from './LinkDialog';
 import { db } from '../../db/db';
 import { recognizeShape, type DrawingElement, type Point, type TextElement } from '../../utils/geometry';
 
@@ -31,6 +32,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     // Text Input State
     const [textInput, setTextInput] = useState<{ x: number, y: number, text: string, id?: string } | null>(null);
+
+    // Link Dialog State
+    const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
 
     // New state for widths (Must be declared before use)
     const [penWidth, setPenWidth] = useState(3);
@@ -321,55 +325,51 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
 
 
-    const insertLink = async () => {
-        // 1. Canvas Elements Selection
+    const insertLink = () => {
         if (selectedIds.size > 0) {
-            const selectedEls = elements.filter(el => selectedIds.has(el.id));
-            if (selectedEls.length === 0) return;
-
-            // Determine default title
-            let defaultTitle = '';
-            if (selectedEls.length === 1 && selectedEls[0].type === 'text') {
-                defaultTitle = selectedEls[0].content;
-            }
-
-            // Prompt
-            const title = prompt("New Note Title:", defaultTitle);
-            if (!title) return;
-
-            try {
-                // Create Note
-                const newNote = {
-                    id: uuidv4(),
-                    title: title,
-                    content: '',
-                    drawings: [],
-                    folderId: currentFolderId, // Use current folder ID
-                    createdAt: Date.now(),
-                    updatedAt: Date.now()
-                };
-                console.log("Adding Note:", newNote);
-                await db.notes.add(newNote);
-
-                // Update Elements with Link
-                setElements(prev => prev.map(el => {
-                    if (selectedIds.has(el.id)) {
-                        return { ...el, link: title };
-                    }
-                    return el;
-                }));
-
-                alert(`Link created to "${title}"`);
-                setSelectedIds(new Set());
-                setMode('view');
-            } catch (e: any) {
-                console.error("Link Creation Error:", e);
-                alert(`Error creating link: ${e.message}`);
-            }
-            return;
+            setIsLinkDialogOpen(true);
+        } else {
+            alert("Please select an element to link.");
         }
+    };
 
-        alert("Please select an element to link.");
+    const handleLinkCreate = async (title: string) => {
+        setIsLinkDialogOpen(false);
+        try {
+            // Create Note
+            const newNote = {
+                id: uuidv4(),
+                title: title,
+                content: '',
+                drawings: [],
+                folderId: currentFolderId,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
+            await db.notes.add(newNote);
+            applyLinkToSelection(title);
+            alert(`Link created to "${title}"`);
+            setMode('view');
+        } catch (e: any) {
+            console.error("Link Creation Error:", e);
+            alert(`Error creating link: ${e.message}`);
+        }
+    };
+
+    const handleLinkSelect = (_noteId: string, title: string) => {
+        setIsLinkDialogOpen(false);
+        applyLinkToSelection(title);
+        setMode('view');
+    };
+
+    const applyLinkToSelection = (linkTitle: string) => {
+        setElements(prev => prev.map(el => {
+            if (selectedIds.has(el.id)) {
+                return { ...el, link: linkTitle };
+            }
+            return el;
+        }));
+        setSelectedIds(new Set());
     };
 
     const onDelete = () => {
@@ -977,6 +977,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                     {Math.round(transform.scale * 100)}%
                 </div>
             </div>
+
+            {/* Link Dialog */}
+            <LinkDialog
+                isOpen={isLinkDialogOpen}
+                onClose={() => setIsLinkDialogOpen(false)}
+                onSelect={handleLinkSelect}
+                onCreate={handleLinkCreate}
+                currentFolderId={currentFolderId}
+            />
         </div>
+
     );
 };
