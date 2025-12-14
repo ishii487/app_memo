@@ -39,7 +39,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+    const transformRef = useRef(transform); // Mutable transform for gestures
     const containerRef = useRef<HTMLDivElement>(null);
+    const domLayerRef = useRef<HTMLDivElement>(null);
 
     const textInputRef = useRef<HTMLTextAreaElement>(null); // For canvas text input
 
@@ -59,7 +61,9 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const initialPinchDist = useRef<number>(0);
     const initialScale = useRef<number>(1);
-    const lastCenter = useRef<{ x: number, y: number } | null>(null);
+    const initialCenter = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
+    const initialTranslate = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
+    const lastCenter = useRef<{ x: number, y: number } | null>(null); // Keep for compatibility logic if needed
 
 
 
@@ -472,11 +476,17 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         if (pointers.length === 2 && !hasPen) {
             isPanning.current = true;
+
+            const center = mid(pointers[0], pointers[1]);
+            initialPinchDist.current = dist(pointers[0], pointers[1]);
+            initialCenter.current = center;
+            initialTranslate.current = { x: transform.x, y: transform.y };
+            initialScale.current = transform.scale;
+
+            // Sync ref
+            transformRef.current = transform;
             currentStrokeRef.current = [];
             setTick(t => t + 1);
-            initialPinchDist.current = dist(pointers[0], pointers[1]);
-            initialScale.current = transform.scale;
-            lastCenter.current = mid(pointers[0], pointers[1]);
         } else if (pointers.length === 1 && !hasPen) {
             if (['pen', 'eraser'].includes(mode)) {
                 isPanning.current = false;
@@ -513,22 +523,25 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             return;
         }
 
-        // Pan/Zoom
-        if (isPanning.current && pointers.length === 2 && lastCenter.current) {
+        // Pan/Zoom (Smooth Ref-based)
+        if (isPanning.current && pointers.length === 2) {
             const newDist = dist(pointers[0], pointers[1]);
             const newCenter = mid(pointers[0], pointers[1]);
 
+            // Calculate Scale
             const scaleFactor = newDist / initialPinchDist.current;
             let newScale = initialScale.current * scaleFactor;
-            newScale = Math.min(Math.max(newScale, 0.1), 5);
+            newScale = Math.min(Math.max(newScale, 0.1), 5); // Clamping
 
-            const scaleRatio = newScale / transform.scale;
-            const dx = newCenter.x - lastCenter.current.x;
-            const dy = newCenter.y - lastCenter.current.y;
+            // Calculate Translation (Absolute)
+            // Tx_new = Center_new - (Center_start - Tx_start) * (Scale_new / Scale_start)
+            const P_world_start_x = (initialCenter.current.x - initialTranslate.current.x) / initialScale.current;
+            const P_world_start_y = (initialCenter.current.y - initialTranslate.current.y) / initialScale.current;
 
-            let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
-            let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
+            let nextX = newCenter.x - P_world_start_x * newScale;
+            let nextY = newCenter.y - P_world_start_y * newScale;
 
+            // Bounds Clamping
             if (containerRef.current) {
                 const cw = containerRef.current.clientWidth;
                 const ch = containerRef.current.clientHeight;
@@ -544,12 +557,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 else nextY = Math.max(0, Math.min(nextY, minY));
             }
 
-            setTransform({
-                scale: newScale,
-                x: nextX,
-                y: nextY
-            });
-            lastCenter.current = newCenter;
+            const newTransform = { scale: newScale, x: nextX, y: nextY };
+            transformRef.current = newTransform;
+
+            // Direct DOM Update (Bypass React)
+            if (domLayerRef.current) {
+                domLayerRef.current.style.transform = `translate(${nextX}px, ${nextY}px) scale(${newScale})`;
+            }
+
+            // Direct Render
+            renderCanvas(newTransform);
             return;
         }
 
@@ -582,6 +599,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         if (activePointers.current.size < 2) {
+            if (isPanning.current) {
+                // Sync final state
+                setTransform(transformRef.current);
+            }
             isPanning.current = false;
             lastCenter.current = null;
         }
@@ -657,8 +678,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     }, [textInput]);
 
 
-    // MAIN RENDER LOOP
+    // Auto-focus text input
     useEffect(() => {
+        if (textInput && textInputRef.current) {
+            textInputRef.current.focus();
+        }
+    }, [textInput]);
+
+
+    // MAIN RENDER FUNCTION (Extracted for direct access)
+    const renderCanvas = (currentTransform: { x: number, y: number, scale: number }) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
@@ -669,22 +698,20 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         // Apply Viewport Transform
         ctx.save();
-        ctx.setTransform(transform.scale, 0, 0, transform.scale, transform.x, transform.y);
+        ctx.setTransform(currentTransform.scale, 0, 0, currentTransform.scale, currentTransform.x, currentTransform.y);
 
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
         // Calculate Viewport AABB (Logical Coordinates)
-        // Screen (0,0) -> Logical (vx, vy)
         const viewport = {
-            x: -transform.x / transform.scale,
-            y: -transform.y / transform.scale,
-            width: canvas.width / transform.scale,
-            height: canvas.height / transform.scale
+            x: -currentTransform.x / currentTransform.scale,
+            y: -currentTransform.y / currentTransform.scale,
+            width: canvas.width / currentTransform.scale,
+            height: canvas.height / currentTransform.scale
         };
 
         // Query Quadtree
-        // const visibleElements = elements; // Old way
         const visibleElements = quadtreeRef.current.query(viewport);
 
         // Draw Visible Elements
@@ -697,7 +724,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.shadowColor = '#3b82f6';
 
             // Adaptive Line Width for Zoom (Minimum 0.5px visual width)
-            const minLineWidth = 0.5 / transform.scale;
+            const minLineWidth = 0.5 / currentTransform.scale;
             let finalWidth = isSelected ? (elWidth + 2) : elWidth;
             if (finalWidth < minLineWidth) finalWidth = minLineWidth;
             ctx.lineWidth = finalWidth;
@@ -762,7 +789,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
             let strokeWidth = mode === 'eraser' ? eraserWidth : penWidth;
             // Adaptive width for current stroke
-            const minLineWidth = 0.5 / transform.scale;
+            const minLineWidth = 0.5 / currentTransform.scale;
             if (strokeWidth < minLineWidth) strokeWidth = minLineWidth;
 
             ctx.lineWidth = strokeWidth;
@@ -786,8 +813,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
             ctx.save();
             ctx.strokeStyle = '#3b82f6';
-            ctx.lineWidth = 1 / transform.scale;
-            ctx.setLineDash([5 / transform.scale, 5 / transform.scale]);
+            ctx.lineWidth = 1 / currentTransform.scale;
+            ctx.setLineDash([5 / currentTransform.scale, 5 / currentTransform.scale]);
             ctx.strokeRect(x, y, w, h);
             ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
             ctx.fillRect(x, y, w, h);
@@ -795,7 +822,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         ctx.restore(); // End Viewport Transform
+    };
 
+    // React Render Loop (Low frequency or logic updates)
+    useEffect(() => {
+        renderCanvas(transform);
     }, [elements, mode, transform, selectionBox, penWidth, eraserWidth, tick]);
 
 
@@ -913,8 +944,10 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
                 {/* 
                    DOM Layer (Transform applied via CSS)
+                   For Text Input Overlay and Backround Text (Legacy)
                 */}
                 <div
+                    ref={domLayerRef}
                     style={{
                         transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                         transformOrigin: '0 0',
