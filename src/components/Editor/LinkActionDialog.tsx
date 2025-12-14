@@ -36,7 +36,7 @@ export const LinkActionDialog: React.FC<LinkActionDialogProps> = ({ isOpen, onCl
                     </button>
                     <button
                         onClick={() => { onEdit(); onClose(); }}
-                        className="flex items-center justify-center gap-2 w-full p-3 border border-gray-300 rounded hover:bg-gray-50 transition"
+                        className="flex items-center justify-center gap-2 w-full p-3 border border-blue-200 text-blue-700 rounded hover:bg-blue-50 transition"
                     >
                         <Edit2 size={18} />
                         Change Link

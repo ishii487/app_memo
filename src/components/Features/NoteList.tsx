@@ -16,7 +16,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         async () => {
             let collection = folderId
                 ? db.notes.where('folderId').equals(folderId)
-                : db.notes.filter(n => !n.folderId);
+                : db.notes.where('folderId').equals(null as any); // Dexie supports null but type might be strict
 
             const items = await collection.toArray();
             return items.sort((a, b) => {
@@ -35,7 +35,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
     const subFolders = useLiveQuery(
         () => folderId
             ? db.folders.where('parentId').equals(folderId).toArray()
-            : db.folders.filter(f => !f.parentId).toArray()
+            : db.folders.where('parentId').equals(null as any).toArray()
         , [folderId]
     );
 
