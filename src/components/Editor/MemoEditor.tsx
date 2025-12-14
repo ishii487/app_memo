@@ -1,10 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { db } from '../../db/db';
 import { recognizeShape, type DrawingElement, type Point, type TextElement } from '../../utils/geometry';
-import { recognizeTextFromCanvas } from '../../utils/ocr';
+
 import { Quadtree } from '../../utils/Quadtree';
 import { v4 as uuidv4 } from 'uuid';
-import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
+import { Undo, Eraser, Pen, Type, Save, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 // import { useLongPress } from 'use-long-press'; // Removed unused
 
@@ -26,7 +26,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [selectionBox, setSelectionBox] = useState<{ start: Point, end: Point } | null>(null);
 
     const [autoShape, setAutoShape] = useState(true);
-    const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+
     const [title, setTitle] = useState('');
 
     // Text Input State
@@ -319,27 +319,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         setTextInput(null);
     };
 
-    const handleOCR = async () => {
-        if (!canvasRef.current) return;
-        setIsProcessingOCR(true);
-        try {
-            const text = await recognizeTextFromCanvas(canvasRef.current);
-            if (text) {
-                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
-                    setNoteContent(prev => prev + (prev ? '\n' : '') + text);
-                    setElements([]);
-                    setMode('text');
-                }
-            } else {
-                alert("No text detected.");
-            }
-        } catch (e) {
-            console.error(e);
-            alert("OCR failed.");
-        } finally {
-            setIsProcessingOCR(false);
-        }
-    };
+
 
     const insertLink = async () => {
         // 1. Canvas Elements Selection
@@ -915,7 +895,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
                 {/* Extra Tools */}
                 <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
-                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
+
 
                 <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
