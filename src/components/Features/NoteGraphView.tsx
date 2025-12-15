@@ -10,21 +10,12 @@ interface NoteGraphViewProps {
 }
 
 // Physics Parameters
-<<<<<<< HEAD
 const REPULSION = 8000; // Increased significantly for sparse layout
 const SPRING_LENGTH = 250; // Increased length
 const SPRING_STRENGTH = 0.04; // Slightly looser
 const CENTERING_STRENGTH = 0.005; // Weaker centering to allow spread
 const FRICTION = 0.90;
 const DT = 0.5;
-=======
-const REPULSION = 2000; // Stronger repulsion for clearer spread
-const SPRING_LENGTH = 120;
-const SPRING_STRENGTH = 0.05;
-const CENTERING_STRENGTH = 0.01; // Slightly stronger centering
-const FRICTION = 0.85; // More friction for stability
-const DT = 0.5; // Smaller time step for stability
->>>>>>> parent of b2d5074 (feat:マインドマップ追加機能)
 
 export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNote }) => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -132,11 +123,7 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         data.nodes.forEach((node, i) => {
             // Spiral or random
             const angle = i * 0.5;
-<<<<<<< HEAD
             const radius = 300 + i * 20; // Even wider spread
-=======
-            const radius = 50 + i * 5;
->>>>>>> parent of b2d5074 (feat:マインドマップ追加機能)
             node.x = Math.cos(angle) * radius;
             node.y = Math.sin(angle) * radius;
             node.vx = 0;
