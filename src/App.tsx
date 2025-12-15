@@ -14,8 +14,16 @@ function App() {
   const [activeNoteTitle, setActiveNoteTitle] = useState<string>("");
   const [initStatus, setInitStatus] = useState<string>("Initializing...");
 
-  // Initial startup check
   useEffect(() => {
+    // Attempt to unlock orientation to allow landscape
+    if (screen.orientation && 'unlock' in screen.orientation) {
+      try {
+        screen.orientation.unlock();
+      } catch (e) {
+        console.warn("Screen orientation unlock failed:", e);
+      }
+    }
+
     const init = async () => {
       try {
         setInitStatus("Checking Database...");
@@ -29,7 +37,6 @@ function App() {
         setInitStatus(`Error: ${e}`);
       }
     };
-    init();
     init();
   }, []);
 

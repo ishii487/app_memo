@@ -15,7 +15,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     return (
-        <div className="flex h-screen w-full bg-background text-foreground overflow-hidden relative transition-colors duration-300">
+        <div className="flex h-[100dvh] w-full bg-background text-foreground overflow-hidden relative transition-colors duration-300">
             {/* Mobile Sidebar Overlay */}
             {isSidebarOpen && (
                 <div
