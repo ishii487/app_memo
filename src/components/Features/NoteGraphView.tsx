@@ -10,11 +10,11 @@ interface NoteGraphViewProps {
 }
 
 // Physics Parameters
-const REPULSION = 2000; // Stronger repulsion for clearer spread
-const SPRING_LENGTH = 120;
+const REPULSION = 6000; // Increased from 2000 for much wider spread
+const SPRING_LENGTH = 200; // Increased from 120
 const SPRING_STRENGTH = 0.05;
-const CENTERING_STRENGTH = 0.01; // Slightly stronger centering
-const FRICTION = 0.85; // More friction for stability
+const CENTERING_STRENGTH = 0.01;
+const FRICTION = 0.90; // Less drag to allow them to fly apart faster initially? No, stability is key. Keep similar or adjust.
 const DT = 0.5; // Smaller time step for stability
 
 export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNote }) => {
@@ -106,7 +106,7 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         data.nodes.forEach((node, i) => {
             // Spiral or random
             const angle = i * 0.5;
-            const radius = 50 + i * 5;
+            const radius = 200 + i * 15; // Increased spread: 50 -> 200, i*5 -> i*15
             node.x = Math.cos(angle) * radius;
             node.y = Math.sin(angle) * radius;
             node.vx = 0;
@@ -114,7 +114,8 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         });
 
         // Pre-tick calculation to stabilize (prevent "exploding" on load)
-        const iterations = 150;
+        // Reduced from 150 to 10 to prevent UI blocking/freezing on navigation
+        const iterations = 10;
 
         for (let i = 0; i < iterations; i++) {
             runPhysicsTick(data.nodes, data.edges);
