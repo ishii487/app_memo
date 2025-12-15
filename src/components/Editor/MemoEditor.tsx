@@ -103,13 +103,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     };
 
-    const handleRedo = () => {
-        if (historyStep < history.length - 1) {
-            const nextStep = historyStep + 1;
-            setHistoryStep(nextStep);
-            setElements(history[nextStep]);
-        }
-    };
+    // handleRedo removed as it is currently unused in UI
 
 
     useEffect(() => {
@@ -628,10 +622,14 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         // Selection Drag Move
-        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
-            const dx = pt.x - lastDragPos.current.x;
-            const dy = pt.y - lastDragPos.current.y;
+        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current && activePointers.current.size === 1) {
+            // Note: e.clientX/Y in PointerEvent should work fine
+            const currentPt = getLocalPoint(e.clientX, e.clientY);
 
+            const dx = currentPt.x - lastDragPos.current.x;
+            const dy = currentPt.y - lastDragPos.current.y;
+
+            // Move local for feedback (no history push yet)
             setElements(prev => prev.map(el => {
                 if (selectedIds.has(el.id)) {
                     return updateElementPosition(el, dx, dy);
@@ -639,7 +637,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 return el;
             }));
 
-            lastDragPos.current = pt;
+            lastDragPos.current = currentPt;
             return;
         }
 
@@ -713,12 +711,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         activePointers.current.delete(e.pointerId);
         e.currentTarget.releasePointerCapture(e.pointerId);
 
+        // Commit Selection Drag
+        if (isDraggingSelection.current) {
+            pushHistory(elements);
+        }
+
         isDraggingSelection.current = false;
         lastDragPos.current = null;
 
         // Commit Box Selection
         if (selectionBox) {
-            // Find elements inside box
             const found = elements.filter(el => isElementInBox(el, selectionBox));
             const newIds = new Set(found.map(el => el.id));
             setSelectedIds(newIds);
@@ -738,21 +740,20 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
             // Check for Link Navigation (Tap in View Mode)
             if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
                 const pt = getLocalPoint(e.clientX, e.clientY);
-                // Check handlers async
                 (async () => {
-                    // Find top-most element with link
                     for (let i = elements.length - 1; i >= 0; i--) {
                         const el = elements[i];
                         if (el.link && isPointNearElement(pt, el, 10)) {
                             const action = await onLinkClick(el.link, currentFolderId);
                             if (action === 'DELETE') {
-                                setElements(prev => prev.map(item => {
+                                const newElements = elements.map(item => {
                                     if (item.id === el.id) {
                                         const { link, ...rest } = item;
-                                        return rest; // Remove link property
+                                        return rest;
                                     }
                                     return item;
-                                }));
+                                });
+                                pushHistory(newElements);
                             }
                             break;
                         }
@@ -764,51 +765,73 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const commitStroke = () => {
         const stroke = currentStrokeRef.current;
-        if (stroke.length === 0) return;
-
-        if (mode === 'eraser') {
-            const threshold = eraserWidth / 2;
-            setElements(prev => prev.filter(el => !isStrokeIntersectingElement(stroke, el, threshold)));
+        if (stroke.length < 2) {
             currentStrokeRef.current = [];
-            setTick(t => t + 1);
+            setTick(t => t + 1); // Clear Canvas
             return;
         }
 
-        let newElement: DrawingElement = {
-            type: 'stroke',
-            points: stroke,
-            color: 'black',
-            width: penWidth,
-            id: uuidv4(),
-            // @ts-ignore
-            params: {}
-        };
+        if (mode === 'eraser') {
+            const idsToRemove = new Set<string>();
+            elements.forEach(el => {
+                if (isStrokeIntersectingElement(stroke, el, eraserWidth)) {
+                    idsToRemove.add(el.id);
+                }
+            });
 
-        if (autoShape) {
-            const shape = recognizeShape(stroke);
-            if (shape) {
-                newElement = { ...newElement, ...shape } as DrawingElement;
+            if (idsToRemove.size > 0) {
+                const newElements = elements.filter(el => !idsToRemove.has(el.id));
+                pushHistory(newElements);
             }
+        } else {
+            const newEl: DrawingElement = {
+                id: uuidv4(),
+                type: 'stroke',
+                points: stroke,
+                color: 'black',
+                width: penWidth,
+                ...(autoShape ? { shape: recognizeShape(stroke) } : {})
+            };
+
+            pushHistory([...elements, newEl]);
         }
 
-        setElements(prev => [...prev, newElement]);
         currentStrokeRef.current = [];
         setTick(t => t + 1);
     };
 
     const commitText = () => {
         if (!textInput) return;
-        if (textInput.text.trim()) {
-            const newEl: TextElement = {
-                type: 'text',
-                id: textInput.id || uuidv4(),
-                x: textInput.x,
-                y: textInput.y,
-                content: textInput.text,
-                fontSize: fontSize,
-                color: 'black'
-            };
-            setElements(prev => [...prev, newEl]);
+        const { x, y, text, id } = textInput;
+
+        if (text.trim()) {
+            let newElements;
+            if (id) {
+                const updatedEl: TextElement = {
+                    id: id,
+                    type: 'text',
+                    x, y,
+                    content: text,
+                    color: 'black',
+                    fontSize: fontSize
+                };
+                newElements = [...elements, updatedEl];
+            } else {
+                const newEl: TextElement = {
+                    id: uuidv4(),
+                    type: 'text',
+                    x, y,
+                    content: text,
+                    color: 'black',
+                    fontSize: fontSize
+                };
+                newElements = [...elements, newEl];
+            }
+            pushHistory(newElements);
+        } else {
+            if (id) {
+                pushHistory(elements);
+            }
         }
         setTextInput(null);
     };
@@ -827,7 +850,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         try {
             const text = await recognizeTextFromCanvas(canvasRef.current);
             if (text) {
-                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
+                if (confirm(`Convert handwriting to text ?\n\n"${text}"`)) {
                     setNoteContent(prev => prev + (prev ? '\n' : '') + text);
                     setElements([]);
                     setMode('text');
@@ -886,7 +909,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 setMode('view');
             } catch (e: any) {
                 console.error("Link Creation Error:", e);
-                alert(`Error creating link: ${e.message}`);
+                alert(`Error creating link: ${e.message} `);
             }
             return;
         }
