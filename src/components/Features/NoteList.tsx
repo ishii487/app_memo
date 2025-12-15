@@ -3,7 +3,6 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Folder } from '../../db/db';
 import { Plus, Folder as FolderIcon, Trash2, Star, Copy } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { NoteGraphView } from './NoteGraphView';
 
 interface NoteListProps {
     folderId: string | null;
@@ -32,7 +31,6 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
         [folderId]
     );
 
-    // Folders: Fetch subfolders (or root folders)
     // Folders: Fetch subfolders (or root folders)
     const subFolders = useLiveQuery(
         () => folderId
@@ -341,7 +339,7 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
 
         let currentId: string | null = targetParentId;
         while (currentId) {
-            const folder: Folder | undefined = await db.folders.get(currentId);
+            const folder = await db.folders.get(currentId);
             if (!folder) break;
             if (folder.parentId === folderId) return true;
             if (folder.id === folderId) return true; // Should be covered by first check but just in case
@@ -430,13 +428,6 @@ export const NoteList: React.FC<NoteListProps> = ({ folderId, onSelectNote, onSe
                 )}
             </div>
             <div className="flex-1 overflow-y-auto p-4 px-6 pb-20">
-                {/* Graph View (Mind Map) */}
-                {!isSelectionMode && notes && notes.length > 0 && (
-                    <div className="mb-6 rounded-xl border border-border overflow-hidden shadow-sm">
-                        <NoteGraphView notes={notes} onSelectNote={onSelectNote} />
-                    </div>
-                )}
-
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {/* Folders */}
                     {subFolders.map(folder => (

@@ -50,27 +50,10 @@
     margin: 0;
     padding: 0;
     width: 100%;
-    height: 100dvh;
+    height: 100vh;
+    /* Fallback */
+    height: var(--app-height, 100dvh);
     overflow: hidden;
     /* Prevent body scroll */
   }
-}
-
-/* Force fix for landscape on some devices where lg breakpoint might be edge case */
-@media (orientation: landscape) and (max-height: 500px) {
-
-  /* Likely a phone in landscape */
-  .fixed.lg\:relative {
-    position: fixed !important;
-    transform: translateX(-100%) !important;
-    /* Hide defaults */
-  }
-
-  /* But we need to handle "isSidebarOpen" state overriding this? 
-     The generic CSS might fight with React inline styles or Tailwind classes. 
-     Tailwind classes usually win. 
-     Let's rely on Tailwind lg breakpoint, but maybe the user's phone says width > 1024?
-     Some high-end phones are wide. 
-     Let's bump AppLayout breakpoint to xl (1280px) just to be super safe for "sidebar hiding".
-  */
 }

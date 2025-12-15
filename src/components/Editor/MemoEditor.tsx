@@ -1,12 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { LinkDialog } from './LinkDialog';
-import { LinkActionDialog } from './LinkActionDialog';
 import { db } from '../../db/db';
 import { recognizeShape, type DrawingElement, type Point, type TextElement } from '../../utils/geometry';
-
-import { Quadtree } from '../../utils/Quadtree';
+import { recognizeTextFromCanvas } from '../../utils/ocr';
 import { v4 as uuidv4 } from 'uuid';
-import { Undo, Eraser, Pen, Type, Save, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
+import { Undo, Eraser, Pen, Type, Save, ScanText, Eye, Link as LinkIcon, MousePointer2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 // import { useLongPress } from 'use-long-press'; // Removed unused
 
@@ -21,32 +18,18 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const [mode, setMode] = useState<'text' | 'pen' | 'eraser' | 'view' | 'select'>('pen');
     const [noteContent, setNoteContent] = useState('');
     const [elements, setElements] = useState<DrawingElement[]>([]);
-    const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+    const [currentFolderId, setCurrentFolderId] = useState<string | null>('root');
 
     // Selection State
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    // Lasso Selection State
-    const [lassoPath, setLassoPath] = useState<Point[]>([]);
+    const [selectionBox, setSelectionBox] = useState<{ start: Point, end: Point } | null>(null);
 
-    // Transformation State
-    const [transformMode, setTransformMode] = useState<'none' | 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'rotate'>('none');
-    const [initialTransformState, setInitialTransformState] = useState<{
-        startPos: Point,
-        elements: DrawingElement[],
-        center: Point,
-        size: { width: number, height: number }
-    } | null>(null);
-
-    const [autoShape, setAutoShape] = useState(false);
-
+    const [autoShape, setAutoShape] = useState(true);
+    const [isProcessingOCR, setIsProcessingOCR] = useState(false);
     const [title, setTitle] = useState('');
 
     // Text Input State
     const [textInput, setTextInput] = useState<{ x: number, y: number, text: string, id?: string } | null>(null);
-
-    // Link Dialog State
-    const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
-    const [linkActionState, setLinkActionState] = useState<{ isOpen: boolean, target: { type: 'element' | 'text', id?: string, content: string } | null } | null>(null);
 
     // New state for widths (Must be declared before use)
     const [penWidth, setPenWidth] = useState(3);
@@ -55,9 +38,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-    const transformRef = useRef(transform); // Mutable transform for gestures
     const containerRef = useRef<HTMLDivElement>(null);
-    const domLayerRef = useRef<HTMLDivElement>(null);
 
     const textInputRef = useRef<HTMLTextAreaElement>(null); // For canvas text input
 
@@ -73,13 +54,11 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const lastDragPos = useRef<{ x: number, y: number } | null>(null);
 
     // Force render helper
-    const [tick, setTick] = useState(0);
+    const [, setTick] = useState(0);
 
     const initialPinchDist = useRef<number>(0);
     const initialScale = useRef<number>(1);
-    const initialCenter = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
-    const initialTranslate = useRef<{ x: number, y: number }>({ x: 0, y: 0 });
-    const lastCenter = useRef<{ x: number, y: number } | null>(null); // Keep for compatibility logic if needed
+    const lastCenter = useRef<{ x: number, y: number } | null>(null);
 
 
 
@@ -89,7 +68,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 setTitle(n.title || '');
                 setNoteContent(n.content || '');
                 if (n.drawings) setElements(n.drawings);
-                setCurrentFolderId(n.folderId || null);
+                setCurrentFolderId(n.folderId || 'root');
             }
         });
     }, [noteId]);
@@ -124,16 +103,229 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
     }, [mode]);
 
-    // ----------------------------------------------------------------------
-    // RENDERING ENGINE (Viewport Based)
-    // ----------------------------------------------------------------------
+    const PAGE_SIZE = { width: 2000, height: 4000 };
 
-    // Max canvas size (logical space)
-    const MAX_CANVAS_SIZE = { width: 20000, height: 20000 };
+    // Draw canvas
+    const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-    // --- HELPER FUNCTIONS (Must be defined before use) ---
+    const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const midX = (p1.x + p2.x) / 2;
+            const midY = (p1.y + p2.y) / 2;
+            ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+        }
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        ctx.stroke();
+    };
 
-    // Coordinate conversion
+    // 1. Init/Update Buffer
+    useEffect(() => {
+        if (!bufferCanvasRef.current) {
+            bufferCanvasRef.current = document.createElement('canvas');
+            bufferCanvasRef.current.width = PAGE_SIZE.width;
+            bufferCanvasRef.current.height = PAGE_SIZE.height;
+        }
+        const buffer = bufferCanvasRef.current;
+        const ctx = buffer.getContext('2d');
+        if (!ctx) return;
+
+        ctx.clearRect(0, 0, buffer.width, buffer.height);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        elements.forEach(el => {
+            const isSelected = selectedIds.has(el.id);
+            ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
+            ctx.fillStyle = el.color; // For textMainly
+            const elWidth = el.type === 'text' ? 0 : el.width;
+            ctx.lineWidth = isSelected ? (elWidth + 2) : elWidth;
+            if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
+            ctx.shadowColor = '#3b82f6';
+
+            if (el.type === 'stroke') {
+                drawSmoothStroke(ctx, el.points);
+            } else if (el.type === 'line') {
+                const { start, end } = el.params;
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.stroke();
+            } else if (el.type === 'circle') {
+                const { x, y, radius } = el.params;
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.stroke();
+            } else if (el.type === 'rect') {
+                const { x, y, width, height } = el.params;
+                ctx.strokeRect(x, y, width, height);
+            } else if (el.type === 'text') {
+                ctx.font = `${el.fontSize}px sans-serif`;
+                // Ensure text color is black for visibility
+                ctx.fillStyle = 'black';
+                ctx.fillText(el.content, el.x, el.y);
+
+                if (isSelected) {
+                    const metrics = ctx.measureText(el.content);
+                    const h = el.fontSize; // Approx
+                    ctx.save();
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(el.x - 2, el.y - h, metrics.width + 4, h + 4);
+                    ctx.restore();
+                }
+            }
+
+            // VISUALS: LINK INDICATOR
+            // In View Mode: Color linked elements Light Blue to indicate clickability
+            // In Edit Mode: Keep original color to avoid confusion? Or show subtle indicator?
+            // User request: "Remove L, make linked CHARACTERS light blue in VIEW MODE"
+            if (el.link && mode === 'view') {
+                const LINK_COLOR = '#0ea5e9'; // Light Blue (Tailwind Sky-500)
+
+                if (el.type === 'text') {
+                    ctx.fillStyle = LINK_COLOR;
+                    ctx.fillText(el.content, el.x, el.y);
+                    // Blue Underline
+                    const metrics = ctx.measureText(el.content);
+                    ctx.beginPath();
+                    ctx.moveTo(el.x, el.y + 4);
+                    ctx.lineTo(el.x + metrics.width, el.y + 4);
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else if (el.type === 'line') {
+                    // Re-draw with blue
+                    const { start, end } = el.params;
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.lineTo(end.x, end.y);
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.stroke();
+                } else if (el.type === 'circle') {
+                    const { x, y, radius } = el.params;
+                    ctx.beginPath();
+                    ctx.arc(x, y, radius, 0, Math.PI * 2);
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.stroke();
+                } else if (el.type === 'rect') {
+                    const { x, y, width, height } = el.params;
+                    ctx.strokeStyle = LINK_COLOR;
+                    ctx.strokeRect(x, y, width, height);
+                } else if (el.type === 'stroke') {
+                    // Re-draw stroke
+                    ctx.beginPath();
+                    const points = el.points;
+                    if (points.length > 0) {
+                        ctx.moveTo(points[0].x, points[0].y);
+                        // Using quadratic curves for smoothness (simplified here to match original logic if it used helpers)
+                        // Actually, reusing the helper 'drawSmoothStroke' but with overridden context strokeStyle would be cleaner,
+                        // but drawSmoothStroke might assume black context? 
+                        // Let's manually set strokeStyle BEFORE calling draw helper?
+                        // No, the original draw loop sets strokeStyle per element if we edited it.
+                        // But here we are iterating. 
+                        // To avoid code duplication, we could just set the Style at the TOP of the loop based on mode/link.
+                        // But let's just override here for clarity.
+                        ctx.strokeStyle = LINK_COLOR;
+                        // Simple line connection for now or duplicate logic
+                        for (let i = 1; i < points.length; i++) {
+                            // Simple line join for now to ensure it works
+                            ctx.lineTo(points[i].x, points[i].y);
+                        }
+                        ctx.stroke();
+                    }
+                }
+            } else if (el.link) {
+                // In non-view mode, show underline for text but no 'L' for shapes as requested?
+                // Or user just said "remove L". Assume standard rendering (black) + underline for text is fine.
+                if (el.type === 'text') {
+                    // Keep the blue underline even in edit mode so they know it's a link?
+                    // User said "In VIEW MODE make characters light blue". Implies Edit mode is normal.
+                    const metrics = ctx.measureText(el.content);
+                    ctx.beginPath();
+                    ctx.moveTo(el.x, el.y + 4);
+                    ctx.lineTo(el.x + metrics.width, el.y + 4);
+                    ctx.strokeStyle = '#2563eb'; // Darker blue for edit mode underline
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+        });
+        ctx.shadowBlur = 0;
+        setTick(t => t + 1);
+
+    }, [elements, PAGE_SIZE.width, PAGE_SIZE.height, selectedIds, mode]); // Added mode dependency
+
+    // 2. Render Screen
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        const buffer = bufferCanvasRef.current;
+        if (!canvas || !buffer) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (canvas.width !== PAGE_SIZE.width || canvas.height !== PAGE_SIZE.height) {
+            canvas.width = PAGE_SIZE.width;
+            canvas.height = PAGE_SIZE.height;
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.drawImage(buffer, 0, 0);
+
+        // Draw current stroke
+        const stroke = currentStrokeRef.current;
+        if (stroke.length > 0) {
+            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
+            ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+            if (mode === 'eraser') ctx.globalAlpha = 0.5;
+
+            if (stroke.length < 2) {
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.moveTo(stroke[0].x, stroke[0].y);
+                for (let i = 1; i < stroke.length - 1; i++) {
+                    const p1 = stroke[i];
+                    const p2 = stroke[i + 1];
+                    const midX = (p1.x + p2.x) / 2;
+                    const midY = (p1.y + p2.y) / 2;
+                    ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+                }
+                ctx.lineTo(stroke[stroke.length - 1].x, stroke[stroke.length - 1].y);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1.0;
+        }
+
+        // Draw Selection Box
+        if (selectionBox) {
+            const { start, end } = selectionBox;
+            const x = Math.min(start.x, end.x);
+            const y = Math.min(start.y, end.y);
+            const w = Math.abs(end.x - start.x);
+            const h = Math.abs(end.y - start.y);
+
+            ctx.save();
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
+            ctx.fillRect(x, y, w, h);
+            ctx.restore();
+        }
+
+    }, [mode, penWidth, eraserWidth, setTick, PAGE_SIZE.width, PAGE_SIZE.height, elements, selectionBox]);
+
     const getLocalPoint = (client_x: number, client_y: number) => {
         if (!containerRef.current) return { x: 0, y: 0 };
         const rect = containerRef.current.getBoundingClientRect();
@@ -144,7 +336,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return { x, y };
     };
 
-    // Math helpers
     const dist = (p1: { x: number, y: number }, p2: { x: number, y: number }) => {
         return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
     };
@@ -161,7 +352,6 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return Math.sqrt(Math.pow(p.x - (v.x + t * (w.x - v.x)), 2) + Math.pow(p.y - (v.y + t * (w.y - v.y)), 2));
     };
 
-    // Hit testing
     const isPointNearElement = (point: Point, el: DrawingElement, threshold: number = 10): boolean => {
         if (el.type === 'stroke') {
             const t = threshold + el.width / 2;
@@ -205,6 +395,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
         if (el.type === 'text') {
             // Check bounding box
+            // Approximate width
             const w = el.content.length * el.fontSize * 0.6;
             const h = el.fontSize;
             // Hit test: origin is bottom-left
@@ -212,89 +403,39 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         }
 
         return false;
+    };
+
+    const isElementInBox = (el: DrawingElement, box: { start: Point, end: Point }) => {
+        const x1 = Math.min(box.start.x, box.end.x);
+        const x2 = Math.max(box.start.x, box.end.x);
+        const y1 = Math.min(box.start.y, box.end.y);
+        const y2 = Math.max(box.start.y, box.end.y);
+
+        // Simple check: is any point inside box?
+        // Or for shapes, is the bounding box intersecting? 
+        // Let's do a simple check: if any of the key points are inside.
+
+        const isInside = (p: Point) => p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
+
+        if (el.type === 'stroke') {
+            return el.points.some(isInside);
+        }
+        if (el.type === 'line') {
+            return isInside(el.params.start) || isInside(el.params.end);
+        }
+        if (el.type === 'circle') {
+            // Check center
+            return isInside({ x: el.params.x, y: el.params.y });
+        }
+        if (el.type === 'rect') {
+            return isInside({ x: el.params.x, y: el.params.y });
+        }
+        if (el.type === 'text') {
+            // Text origin is bottom-left, check origin
+            return isInside({ x: el.x, y: el.y - el.fontSize / 2 });
+        }
         return false;
     };
-
-    // Lasso Hit Testing (Ray Casting)
-    const isPointInPolygon = (point: Point, vs: Point[]) => {
-        let inside = false;
-        for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
-            const xi = vs[i].x, yi = vs[i].y;
-            const xj = vs[j].x, yj = vs[j].y;
-            const intersect = ((yi > point.y) !== (yj > point.y))
-                && (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
-            if (intersect) inside = !inside;
-        }
-        return inside;
-    };
-
-    const isElementInLasso = (el: DrawingElement, polygon: Point[]) => {
-        if (polygon.length < 3) return false;
-
-        // Simple optimization: Check if any point of the element is inside or if center is inside
-        // Better for user experience: center or bounding box corners
-        if (el.type === 'stroke') {
-            // Check sample points
-            for (let i = 0; i < el.points.length; i += 5) {
-                if (isPointInPolygon(el.points[i], polygon)) return true;
-            }
-            return false;
-        }
-
-        // Shape/Text center check
-        let center = { x: 0, y: 0 };
-        if (el.type === 'text') {
-            const w = el.content.length * el.fontSize * 0.6;
-            const h = el.fontSize;
-            center = { x: el.x + w / 2, y: el.y - h / 2 };
-        } else if (el.type === 'rect' || el.type === 'circle') {
-            center = { x: el.params.x + (el.params.width || 0) / 2, y: el.params.y + (el.params.height || 0) / 2 };
-            if (el.type === 'circle') center = { x: el.params.x, y: el.params.y };
-        } else if (el.type === 'line') {
-            center = mid(el.params.start, el.params.end);
-        }
-
-        return isPointInPolygon(center, polygon);
-    };
-
-    // Calculate Selection Bounds
-    const getSelectionBounds = () => {
-        if (selectedIds.size === 0) return null;
-        const selectedEls = elements.filter(el => selectedIds.has(el.id));
-        if (selectedEls.length === 0) return null;
-
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-
-        selectedEls.forEach(el => {
-            if (el.type === 'stroke') {
-                el.points.forEach(p => {
-                    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-                    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-                });
-            } else if (el.type === 'text') {
-                const w = el.content.length * el.fontSize * 0.6;
-                const h = el.fontSize;
-                minX = Math.min(minX, el.x); maxX = Math.max(maxX, el.x + w);
-                minY = Math.min(minY, el.y - h); maxY = Math.max(maxY, el.y);
-            } else if (el.type === 'rect') {
-                const { x, y, width, height } = el.params;
-                minX = Math.min(minX, x); maxX = Math.max(maxX, x + width);
-                minY = Math.min(minY, y); maxY = Math.max(maxY, y + height);
-            } else if (el.type === 'circle') {
-                const { x, y, radius } = el.params;
-                minX = Math.min(minX, x - radius); maxX = Math.max(maxX, x + radius);
-                minY = Math.min(minY, y - radius); maxY = Math.max(maxY, y + radius);
-            } else if (el.type === 'line') {
-                const { start, end } = el.params;
-                minX = Math.min(minX, start.x, end.x); maxX = Math.max(maxX, start.x, end.x);
-                minY = Math.min(minY, start.y, end.y); maxY = Math.max(maxY, start.y, end.y);
-            }
-        });
-
-        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-    };
-
-
 
     const isStrokeIntersectingElement = (stroke: Point[], el: DrawingElement, threshold: number) => {
         for (let i = 0; i < stroke.length; i += 3) {
@@ -303,23 +444,115 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return false;
     };
 
-    // Drawing Helper
-    const drawSmoothStroke = (ctx: CanvasRenderingContext2D, points: Point[]) => {
-        if (points.length < 2) return;
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length - 1; i++) {
-            const p1 = points[i];
-            const p2 = points[i + 1];
-            const midX = (p1.x + p2.x) / 2;
-            const midY = (p1.y + p2.y) / 2;
-            ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+
+    const onPointerDown = (e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+        e.currentTarget.setPointerCapture(e.pointerId);
+
+        const pointers = Array.from(activePointers.current.values());
+        const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
+
+        // TEXT MODE: Create or Edit
+        // Priority: Hit existing text first
+        if (mode === 'text' && pointers.length === 1) {
+            let hitText = null;
+            // Iterate in reverse to hit top-most first
+            for (let i = elements.length - 1; i >= 0; i--) {
+                const el = elements[i];
+                if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
+                    hitText = el;
+                    break;
+                }
+            }
+
+            if (hitText) {
+                // Edit existing
+                setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
+                setElements(prev => prev.filter(e => e.id !== hitText!.id));
+            } else {
+                // Create new
+                // If input already open, commit it first
+                if (textInput) {
+                    commitText();
+                }
+                // Small delay to prevent immediate close if we just clicked? 
+                // No, just open new input at new pos
+                setTextInput({ x: pt.x, y: pt.y, text: '' });
+            }
+            return;
         }
-        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-        ctx.stroke();
+
+        // If clicking outside text input while it's open -> commit
+        if (textInput) {
+            commitText();
+            return; // STOP processing to prevent immediate new input creation
+        }
+
+
+        // SELECTION MODE
+        if (mode === 'select' && pointers.length === 1) {
+            // Check Hit
+            let foundId: string | null = null;
+            for (let i = elements.length - 1; i >= 0; i--) {
+                if (isPointNearElement(pt, elements[i], 10)) {
+                    foundId = elements[i].id;
+                    break;
+                }
+            }
+
+            if (foundId) {
+                // If clicking a selected item, start dragging ALL selected
+                // But if we clicked an item that is NOT in the current selection, selection should reset to just this item
+                if (selectedIds.has(foundId)) {
+                    // Start dragging current selection
+                } else {
+                    // New single selection
+                    setSelectedIds(new Set([foundId]));
+                }
+                isDraggingSelection.current = true;
+                lastDragPos.current = pt;
+            } else {
+                // Clicked Empty Space
+                // Clear selection
+                setSelectedIds(new Set());
+                // Start Box Selection
+                setSelectionBox({ start: pt, end: pt });
+            }
+
+            isPanning.current = false; // Override pan
+            return;
+        }
+
+        if (hasPen && e.pointerType === 'pen') {
+            if (['pen', 'eraser'].includes(mode)) {
+                isPanning.current = false;
+                currentStrokeRef.current = [pt];
+                setTick(t => t + 1);
+            }
+            return;
+        }
+
+        // Standard Pan/Zoom gestures
+        if (pointers.length === 2 && !hasPen) {
+            isPanning.current = true;
+            currentStrokeRef.current = [];
+            setTick(t => t + 1);
+            initialPinchDist.current = dist(pointers[0], pointers[1]);
+            initialScale.current = transform.scale;
+            lastCenter.current = mid(pointers[0], pointers[1]);
+        } else if (pointers.length === 1 && !hasPen) {
+            if (['pen', 'eraser'].includes(mode)) {
+                isPanning.current = false;
+                currentStrokeRef.current = [pt];
+                setTick(t => t + 1);
+            }
+        }
     };
 
-    // State Updates
     const updateElementPosition = (el: DrawingElement, dx: number, dy: number): DrawingElement => {
         if (el.type === 'stroke') {
             return { ...el, points: el.points.map(p => ({ x: p.x + dx, y: p.y + dy })) };
@@ -338,104 +571,158 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         return el;
     };
 
-    const rotateElement = (el: DrawingElement, center: Point, angle: number): DrawingElement => {
-        const rotate = (p: Point) => {
-            const dx = p.x - center.x;
-            const dy = p.y - center.y;
-            return {
-                x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle),
-                y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle)
-            };
-        };
+    const onPointerMove = (e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
 
-        if (el.type === 'stroke') {
-            return { ...el, points: el.points.map(rotate) };
-        } else if (el.type === 'line') {
-            return { ...el, params: { ...el.params, start: rotate(el.params.start), end: rotate(el.params.end) } };
-        } else if (el.type === 'text') {
-            const p = rotate({ x: el.x, y: el.y });
-            return { ...el, x: p.x, y: p.y }; // Rotation of text itself not supported in this model yet, just position
-        } else if (el.type === 'rect') {
-            // Convert rect to poly to rotate? Rect params are x,y,w,h (axis aligned).
-            // If we support rotation, we must change Rect to Polygon or store rotation.
-            // For now: Approximate by rotating center?
-            // Actually user asked for rotation. 
-            // LIMITATION: 'rect' type is axis aligned. 'circle' is invariant.
-            // To support true rotation, we should convert shapes to strokes or add rotation prop.
-            // Let's convert Rect/Circle to Stroke (polygon) upon rotation for now to support visual rotation?
-            // OR: Just rotate the position for MVP if complex.
-            // User Request: "大きさや角度を変えられるようにしたい"
-            // I will implement "Convert to Stroke" behavior for rotation of Shapes to handle it correctly.
+        if (!activePointers.current.has(e.pointerId)) return;
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
 
-            // Convert Rect to Stroke Points
-            const { x, y, width, height } = el.params;
-            const p1 = { x, y };
-            const p2 = { x: x + width, y };
-            const p3 = { x: x + width, y: y + height };
-            const p4 = { x, y: y + height };
-            return {
-                type: 'stroke',
-                id: el.id,
-                color: el.color,
-                width: el.width,
-                points: [p1, p2, p3, p4, p1].map(rotate),
-                link: el.link
-            };
-        } else if (el.type === 'circle') {
-            // Circle rotation only changes position
-            const { x, y } = el.params;
-            const p = rotate({ x, y });
-            return { ...el, params: { ...el.params, x: p.x, y: p.y } };
+        const pointers = Array.from(activePointers.current.values());
+        const hasPen = pointers.some(p => p.type === 'pen');
+        const pt = getLocalPoint(e.clientX, e.clientY);
+
+        // Update Box Selection
+        if (selectionBox) {
+            setSelectionBox(prev => prev ? { ...prev, end: pt } : null);
+            // Auto-scroll logic could go here if near edge
+            return;
         }
-        return el;
-    };
 
-    const scaleElement = (el: DrawingElement, oldB: { x: number, y: number, w: number, h: number }, newB: { x: number, y: number, w: number, h: number }): DrawingElement => {
-        const mapX = (x: number) => newB.x + (x - oldB.x) * (newB.w / oldB.w);
-        const mapY = (y: number) => newB.y + (y - oldB.y) * (newB.h / oldB.h);
+        // Selection Drag Move
+        if (mode === 'select' && isDraggingSelection.current && lastDragPos.current) {
+            const dx = pt.x - lastDragPos.current.x;
+            const dy = pt.y - lastDragPos.current.y;
 
-        const mapPt = (p: Point) => ({ x: mapX(p.x), y: mapY(p.y) });
+            setElements(prev => prev.map(el => {
+                if (selectedIds.has(el.id)) {
+                    return updateElementPosition(el, dx, dy);
+                }
+                return el;
+            }));
 
-        if (el.type === 'stroke') {
-            return { ...el, points: el.points.map(mapPt) };
-        } else if (el.type === 'line') {
-            return { ...el, params: { ...el.params, start: mapPt(el.params.start), end: mapPt(el.params.end) } };
-        } else if (el.type === 'rect') {
-            const { x, y, width, height } = el.params;
-            const nx = mapX(x);
-            const ny = mapY(y);
-            const nw = width * (newB.w / oldB.w);
-            const nh = height * (newB.h / oldB.h);
-            return { ...el, params: { ...el.params, x: nx, y: ny, width: nw, height: nh } };
-        } else if (el.type === 'circle') {
-            const { x, y, radius } = el.params;
-            const nx = mapX(x);
-            const ny = mapY(y);
-            const nr = radius * Math.abs(newB.w / oldB.w); // simple uniform scaling assumption
-            return { ...el, params: { ...el.params, x: nx, y: ny, radius: nr } };
-        } else if (el.type === 'text') {
-            const nx = mapX(el.x);
-            const ny = mapY(el.y);
-            const nf = el.fontSize * Math.abs(newB.h / oldB.h);
-            return { ...el, x: nx, y: ny, fontSize: nf };
+            lastDragPos.current = pt;
+            return;
         }
-        return el;
-    };
 
-    const setInitialTransform = (pt: Point) => {
-        const selectedEls = elements.filter(el => selectedIds.has(el.id));
-        const bounds = getSelectionBounds();
-        if (bounds) {
-            setInitialTransformState({
-                startPos: pt,
-                elements: selectedEls,
-                center: { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 },
-                size: { width: bounds.w, height: bounds.h }
+        // Pan/Zoom
+        if (isPanning.current && pointers.length === 2 && lastCenter.current) {
+            const newDist = dist(pointers[0], pointers[1]);
+            const newCenter = mid(pointers[0], pointers[1]);
+
+            const scaleFactor = newDist / initialPinchDist.current;
+            let newScale = initialScale.current * scaleFactor;
+            newScale = Math.min(Math.max(newScale, 0.1), 3);
+
+            const scaleRatio = newScale / transform.scale;
+            const dx = newCenter.x - lastCenter.current.x;
+            const dy = newCenter.y - lastCenter.current.y;
+
+            let nextX = newCenter.x - (newCenter.x - transform.x) * scaleRatio + dx;
+            let nextY = newCenter.y - (newCenter.y - transform.y) * scaleRatio + dy;
+
+            if (containerRef.current) {
+                const cw = containerRef.current.clientWidth;
+                const ch = containerRef.current.clientHeight;
+                const minX = cw - PAGE_SIZE.width * newScale;
+                const minY = ch - PAGE_SIZE.height * newScale;
+
+                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
+                else nextX = Math.max(0, Math.min(nextX, minX));
+
+                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
+                else nextY = Math.max(0, Math.min(nextY, minY));
+            }
+
+            setTransform({
+                scale: newScale,
+                x: nextX,
+                y: nextY
             });
+            lastCenter.current = newCenter;
+            return;
+        }
+
+        // Drawing
+        if (!isPanning.current && ['pen', 'eraser'].includes(mode)) {
+            if (hasPen && e.pointerType !== 'pen') return;
+
+            if (currentStrokeRef.current.length > 0) {
+                const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
+                if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
+                    currentStrokeRef.current.push(pt);
+
+                    // Optimization: Direct draw for feedback
+                    const canvas = canvasRef.current;
+                    const ctx = canvas?.getContext('2d');
+                    if (ctx) {
+                        ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
+                        ctx.lineWidth = mode === 'eraser' ? eraserWidth : penWidth;
+                        if (mode === 'eraser') ctx.globalAlpha = 0.5;
+
+                        ctx.beginPath();
+                        ctx.moveTo(last.x, last.y);
+                        ctx.lineTo(pt.x, pt.y);
+                        ctx.stroke();
+                        if (mode === 'eraser') ctx.globalAlpha = 1.0;
+                    }
+                }
+            }
         }
     };
 
-    // --- ACTIONS (Defined before use) ---
+    const onPointerUp = (e: React.PointerEvent) => {
+        activePointers.current.delete(e.pointerId);
+        e.currentTarget.releasePointerCapture(e.pointerId);
+
+        isDraggingSelection.current = false;
+        lastDragPos.current = null;
+
+        // Commit Box Selection
+        if (selectionBox) {
+            // Find elements inside box
+            const found = elements.filter(el => isElementInBox(el, selectionBox));
+            const newIds = new Set(found.map(el => el.id));
+            setSelectedIds(newIds);
+            setSelectionBox(null);
+        }
+
+        if (activePointers.current.size < 2) {
+            isPanning.current = false;
+            lastCenter.current = null;
+        }
+
+        if (currentStrokeRef.current.length > 0) {
+            if (e.pointerType === 'pen' || activePointers.current.size === 0) {
+                commitStroke();
+            }
+        } else {
+            // Check for Link Navigation (Tap in View Mode)
+            if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
+                const pt = getLocalPoint(e.clientX, e.clientY);
+                // Check handlers async
+                (async () => {
+                    // Find top-most element with link
+                    for (let i = elements.length - 1; i >= 0; i--) {
+                        const el = elements[i];
+                        if (el.link && isPointNearElement(pt, el, 10)) {
+                            const action = await onLinkClick(el.link, currentFolderId);
+                            if (action === 'DELETE') {
+                                setElements(prev => prev.map(item => {
+                                    if (item.id === el.id) {
+                                        const { link, ...rest } = item;
+                                        return rest; // Remove link property
+                                    }
+                                    return item;
+                                }));
+                            }
+                            break;
+                        }
+                    }
+                })();
+            }
+        }
+    };
 
     const commitStroke = () => {
         const stroke = currentStrokeRef.current;
@@ -488,607 +775,87 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         setTextInput(null);
     };
 
-
-
-    const insertLink = () => {
-        if (selectedIds.size > 0) {
-            setIsLinkDialogOpen(true);
-        } else {
-            alert("Please select an element to link.");
+    // Auto-focus text input
+    useEffect(() => {
+        if (textInput && textInputRef.current) {
+            textInputRef.current.focus();
         }
-    };
+    }, [textInput]);
 
-    const handleLinkCreate = async (title: string) => {
-        setIsLinkDialogOpen(false);
+
+    const handleOCR = async () => {
+        if (!canvasRef.current) return;
+        setIsProcessingOCR(true);
         try {
-            // Create Note
-            const newNote = {
-                id: uuidv4(),
-                title: title,
-                content: '',
-                drawings: [],
-                folderId: currentFolderId,
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-            };
-            await db.notes.add(newNote);
-            applyLinkToSelection(title);
-            alert(`Link created to "${title}"`);
-            setMode('view');
-        } catch (e: any) {
-            console.error("Link Creation Error:", e);
-            alert(`Error creating link: ${e.message}`);
+            const text = await recognizeTextFromCanvas(canvasRef.current);
+            if (text) {
+                if (confirm(`Convert handwriting to text?\n\n"${text}"`)) {
+                    setNoteContent(prev => prev + (prev ? '\n' : '') + text);
+                    setElements([]);
+                    setMode('text');
+                }
+            } else {
+                alert("No text detected.");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("OCR failed.");
+        } finally {
+            setIsProcessingOCR(false);
         }
     };
 
-    const handleLinkSelect = (_noteId: string, title: string) => {
-        setIsLinkDialogOpen(false);
+    const insertLink = async () => {
+        // 1. Canvas Elements Selection
+        if (selectedIds.size > 0) {
+            const selectedEls = elements.filter(el => selectedIds.has(el.id));
+            if (selectedEls.length === 0) return;
 
-        // Check if we are editing a specific target from LinkActionDialog
-        if (linkActionState?.target) {
-            const target = linkActionState.target;
-            if (target.type === 'element' && target.id) {
+            // Determine default title
+            let defaultTitle = '';
+            if (selectedEls.length === 1 && selectedEls[0].type === 'text') {
+                defaultTitle = selectedEls[0].content;
+            }
+
+            // Prompt
+            const title = prompt("New Note Title:", defaultTitle);
+            if (!title) return;
+
+            try {
+                // Create Note
+                const newNote = {
+                    id: uuidv4(),
+                    title: title,
+                    content: '',
+                    drawings: [],
+                    folderId: currentFolderId, // Use current folder ID
+                    createdAt: Date.now(),
+                    updatedAt: Date.now()
+                };
+                console.log("Adding Note:", newNote);
+                await db.notes.add(newNote);
+
+                // Update Elements with Link
                 setElements(prev => prev.map(el => {
-                    if (el.id === target.id) {
+                    if (selectedIds.has(el.id)) {
                         return { ...el, link: title };
                     }
                     return el;
                 }));
-            } else if (target.type === 'text' && target.content) {
-                // For text content, we replace the OLD link with NEW link
-                // target.content holds the OLD link title
-                const oldLinkStr = `[[${target.content}]]`;
-                const newLinkStr = `[[${title}]]`;
-                setNoteContent(prev => prev.replaceAll(oldLinkStr, newLinkStr));
+
+                alert(`Link created to "${title}"`);
+                setSelectedIds(new Set());
+                setMode('view');
+            } catch (e: any) {
+                console.error("Link Creation Error:", e);
+                alert(`Error creating link: ${e.message}`);
             }
-            // Close action dialog state
-            setLinkActionState(null);
             return;
         }
 
-        applyLinkToSelection(title);
-        setMode('view');
+        alert("Please select an element to link.");
     };
 
-    const applyLinkToSelection = (linkTitle: string) => {
-        setElements(prev => prev.map(el => {
-            if (selectedIds.has(el.id)) {
-                return { ...el, link: linkTitle };
-            }
-            return el;
-        }));
-        setSelectedIds(new Set());
-    };
-
-    const onDelete = () => {
-        if (selectedIds.size > 0) {
-            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
-            setSelectedIds(new Set());
-        }
-    };
-
-
-    // --- EVENT HANDLERS ---
-
-    const onPointerDown = (e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-        e.currentTarget.setPointerCapture(e.pointerId);
-
-        const pointers = Array.from(activePointers.current.values());
-        const hasPen = pointers.some(p => p.type === 'pen');
-        const pt = getLocalPoint(e.clientX, e.clientY);
-
-        // TEXT MODE: Create or Edit
-        if (mode === 'text' && pointers.length === 1) {
-            let hitText = null;
-            for (let i = elements.length - 1; i >= 0; i--) {
-                const el = elements[i];
-                if (el.type === 'text' && isPointNearElement(pt, el, 10)) {
-                    hitText = el;
-                    break;
-                }
-            }
-
-            if (hitText) {
-                setTextInput({ x: hitText.x, y: hitText.y, text: hitText.content, id: hitText.id });
-                setElements(prev => prev.filter(e => e.id !== hitText!.id));
-            } else {
-                if (textInput) commitText();
-                setTextInput({ x: pt.x, y: pt.y, text: '' });
-            }
-            return;
-        }
-
-        if (textInput) {
-            commitText();
-            return;
-        }
-
-        // SELECTION MODE
-        // SELECTION MODE
-        if (mode === 'select' && pointers.length === 1) {
-            // Check for Transform Handles First
-            const bounds = getSelectionBounds();
-            if (bounds && selectedIds.size > 0) {
-                const HANDLE_SIZE = 20 / transform.scale;
-                const { x, y, w, h } = bounds;
-
-                // Helper for handle hit test
-                const hit = (hx: number, hy: number) => Math.abs(pt.x - hx) < HANDLE_SIZE && Math.abs(pt.y - hy) < HANDLE_SIZE;
-
-                if (hit(x, y)) { setTransformMode('nw'); setInitialTransform(pt); return; }
-                if (hit(x + w, y)) { setTransformMode('ne'); setInitialTransform(pt); return; }
-                if (hit(x + w, y + h)) { setTransformMode('se'); setInitialTransform(pt); return; }
-                if (hit(x, y + h)) { setTransformMode('sw'); setInitialTransform(pt); return; }
-                if (hit(x + w / 2, y - 40 / transform.scale)) { setTransformMode('rotate'); setInitialTransform(pt); return; }
-
-                // Check for move (inside bounds)
-                if (pt.x >= x && pt.x <= x + w && pt.y >= y && pt.y <= y + h) {
-                    setTransformMode('move');
-                    setInitialTransform(pt);
-                    return;
-                }
-            }
-
-            // Start Lasso
-            setLassoPath([pt]);
-            setSelectedIds(new Set()); // Clear selection on new lasso
-            isPanning.current = false;
-            return;
-        }
-
-        if (hasPen && e.pointerType === 'pen') {
-            if (['pen', 'eraser'].includes(mode)) {
-                isPanning.current = false;
-                currentStrokeRef.current = [pt];
-                setTick(t => t + 1);
-            }
-            return;
-        }
-
-        if (pointers.length === 2 && !hasPen) {
-            isPanning.current = true;
-
-            const center = mid(pointers[0], pointers[1]);
-            initialPinchDist.current = dist(pointers[0], pointers[1]);
-            initialCenter.current = center;
-            initialTranslate.current = { x: transform.x, y: transform.y };
-            initialScale.current = transform.scale;
-
-            // Sync ref
-            transformRef.current = transform;
-            currentStrokeRef.current = [];
-            setTick(t => t + 1);
-        } else if (pointers.length === 1 && !hasPen) {
-            if (['pen', 'eraser'].includes(mode)) {
-                isPanning.current = false;
-                currentStrokeRef.current = [pt];
-                setTick(t => t + 1);
-            }
-        }
-    };
-
-    const onPointerMove = (e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (!activePointers.current.has(e.pointerId)) return;
-        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-
-        const pointers = Array.from(activePointers.current.values());
-        const hasPen = pointers.some(p => p.type === 'pen');
-        const pt = getLocalPoint(e.clientX, e.clientY);
-
-        if (lassoPath.length > 0) {
-            setLassoPath(prev => [...prev, pt]);
-            return;
-        }
-
-        if (transformMode !== 'none' && initialTransformState && mode === 'select') {
-            const { startPos, elements: initialEls, center, size } = initialTransformState;
-            const dx = pt.x - startPos.x;
-            const dy = pt.y - startPos.y;
-
-            if (transformMode === 'move') {
-                setElements(prev => prev.map(el => {
-                    const initEl = initialEls.find(ie => ie.id === el.id);
-                    if (!initEl) return el;
-                    return updateElementPosition(initEl, dx, dy);
-                }));
-            } else if (transformMode === 'rotate') {
-                // Calculate angle
-                const startAngle = Math.atan2(startPos.y - center.y, startPos.x - center.x);
-                const currentAngle = Math.atan2(pt.y - center.y, pt.x - center.x);
-                const dAngle = currentAngle - startAngle;
-
-                // Rotate elements around center
-                setElements(prev => prev.map(el => {
-                    const initEl = initialEls.find(ie => ie.id === el.id);
-                    if (!initEl) return el;
-                    return rotateElement(initEl, center, dAngle);
-                }));
-            } else {
-                // Scale
-                // Calculate scale factor based on handle
-
-
-                // Simplified Uniform Scale for MVP to avoid complexity with flip logic
-                // But user asked for "change size", so aspect ratio might change? 
-                // Let's implement independent scaling for corner handles
-
-                // Logic: 
-                // 1. Calculate new width/height based on dx/dy and handle position
-                // 2. Scale elements relative to the FIXED opposite corner
-
-                // For simplicity, let's just do translation of points for now or uniform scale? 
-                // Implementing full matrix transform for vector shapes is complex.
-                // Let's try a simpler approach: Scale relative to center.
-
-                // Actually the easiest robust way is:
-                // Calculate new Bounds.
-                // Map point (x,y) from OldBounds to NewBounds.
-                // NewX = NewBounds.X + (x - OldBounds.X) * (NewWidth / OldWidth)
-
-                let newBounds = { x: initialTransformState.center.x - size.width / 2, y: initialTransformState.center.y - size.height / 2, w: size.width, h: size.height };
-
-                if (transformMode === 'se') { newBounds.w += dx; newBounds.h += dy; }
-                else if (transformMode === 'sw') { newBounds.x += dx; newBounds.w -= dx; newBounds.h += dy; }
-                else if (transformMode === 'ne') { newBounds.y += dy; newBounds.h -= dy; newBounds.w += dx; }
-                else if (transformMode === 'nw') { newBounds.x += dx; newBounds.w -= dx; newBounds.y += dy; newBounds.h -= dy; }
-
-                // Prevent negative size
-                if (newBounds.w < 1) newBounds.w = 1; // Flip logic would be better but let's clamp for safety
-                if (newBounds.h < 1) newBounds.h = 1;
-
-                setElements(prev => prev.map(el => {
-                    const initEl = initialEls.find(ie => ie.id === el.id);
-                    if (!initEl) return el;
-                    return scaleElement(initEl, { x: initialTransformState.center.x - size.width / 2, y: initialTransformState.center.y - size.height / 2, w: size.width, h: size.height }, newBounds);
-                }));
-            }
-            return;
-        }
-
-        // Pan/Zoom (Smooth Ref-based)
-        if (isPanning.current && pointers.length === 2) {
-            const newDist = dist(pointers[0], pointers[1]);
-            const newCenter = mid(pointers[0], pointers[1]);
-
-            // Calculate Scale
-            const scaleFactor = newDist / initialPinchDist.current;
-            let newScale = initialScale.current * scaleFactor;
-            newScale = Math.min(Math.max(newScale, 0.1), 5); // Clamping
-
-            // Calculate Translation (Absolute)
-            // Tx_new = Center_new - (Center_start - Tx_start) * (Scale_new / Scale_start)
-            const P_world_start_x = (initialCenter.current.x - initialTranslate.current.x) / initialScale.current;
-            const P_world_start_y = (initialCenter.current.y - initialTranslate.current.y) / initialScale.current;
-
-            let nextX = newCenter.x - P_world_start_x * newScale;
-            let nextY = newCenter.y - P_world_start_y * newScale;
-
-            // Bounds Clamping
-            if (containerRef.current) {
-                const cw = containerRef.current.clientWidth;
-                const ch = containerRef.current.clientHeight;
-                const contentW = MAX_CANVAS_SIZE.width * newScale;
-                const contentH = MAX_CANVAS_SIZE.height * newScale;
-                const minX = cw - contentW;
-                const minY = ch - contentH;
-
-                if (minX < 0) nextX = Math.max(minX, Math.min(nextX, 0));
-                else nextX = Math.max(0, Math.min(nextX, minX));
-
-                if (minY < 0) nextY = Math.max(minY, Math.min(nextY, 0));
-                else nextY = Math.max(0, Math.min(nextY, minY));
-            }
-
-            const newTransform = { scale: newScale, x: nextX, y: nextY };
-            transformRef.current = newTransform;
-
-            // Direct DOM Update (Bypass React)
-            if (domLayerRef.current) {
-                domLayerRef.current.style.transform = `translate(${nextX}px, ${nextY}px) scale(${newScale})`;
-            }
-
-            // Direct Render
-            renderCanvas(newTransform);
-            return;
-        }
-
-        // Drawing
-        if (!isPanning.current && ['pen', 'eraser'].includes(mode)) {
-            if (hasPen && e.pointerType !== 'pen') return;
-
-            if (currentStrokeRef.current.length > 0) {
-                const last = currentStrokeRef.current[currentStrokeRef.current.length - 1];
-                if (Math.abs(last.x - pt.x) > 1 || Math.abs(last.y - pt.y) > 1) {
-                    currentStrokeRef.current.push(pt);
-                    setTick(t => t + 1); // Trigger render loop
-                }
-            }
-        }
-    };
-
-    const onPointerUp = (e: React.PointerEvent) => {
-        activePointers.current.delete(e.pointerId);
-        e.currentTarget.releasePointerCapture(e.pointerId);
-
-        isDraggingSelection.current = false;
-        lastDragPos.current = null;
-        setTransformMode('none');
-        setInitialTransformState(null);
-
-        if (lassoPath.length > 0) {
-            // Close loop logic check? Not strictly needed for polygon test usually
-            const found = elements.filter(el => isElementInLasso(el, lassoPath));
-            const newIds = new Set(found.map(el => el.id));
-            setSelectedIds(newIds);
-            setLassoPath([]);
-        }
-
-        if (activePointers.current.size < 2) {
-            if (isPanning.current) {
-                // Sync final state
-                setTransform(transformRef.current);
-            }
-            isPanning.current = false;
-            lastCenter.current = null;
-        }
-
-        if (currentStrokeRef.current.length > 0) {
-            if (e.pointerType === 'pen' || activePointers.current.size === 0) {
-                commitStroke();
-            }
-        } else {
-            // Check for Link Navigation (Tap in View Mode)
-            if (mode === 'view' && !isPanning.current && activePointers.current.size === 0) {
-                const pt = getLocalPoint(e.clientX, e.clientY);
-                (async () => {
-                    for (let i = elements.length - 1; i >= 0; i--) {
-                        const el = elements[i];
-                        if (el.link && isPointNearElement(pt, el, 10)) {
-                            // Open Action Dialog
-                            setLinkActionState({
-                                isOpen: true,
-                                target: { type: 'element', id: el.id, content: el.link }
-                            });
-                            break;
-                        }
-                    }
-                })();
-            }
-        }
-    };
-
-
-    // --- EFFECTS ---
-
-    // Update screen canvas size on resize
-    useEffect(() => {
-        const handleResize = () => {
-            if (containerRef.current && canvasRef.current) {
-                const rect = containerRef.current.getBoundingClientRect();
-                canvasRef.current.width = rect.width;
-                canvasRef.current.height = rect.height;
-                setTick(t => t + 1); // Force redraw
-            }
-        };
-        window.addEventListener('resize', handleResize);
-        handleResize(); // Init
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-
-    // Quadtree Ref
-    // Initialize with MAX_CANVAS_SIZE or sufficiently large bounds
-    // Since MAX_CANVAS_SIZE is 20000x20000, we use that.
-    const quadtreeRef = useRef<Quadtree>(new Quadtree({ x: 0, y: 0, width: 20000, height: 20000 }));
-
-    // Rebuild Quadtree when elements change
-    useEffect(() => {
-        // We could optimize this to not rebuild entirely if we swtiched to mutable elements or action-based updates
-        // But for now, full rebuild is safe.
-        const qt = new Quadtree({ x: 0, y: 0, width: 20000, height: 20000 });
-        elements.forEach(el => qt.insert(el));
-        quadtreeRef.current = qt;
-    }, [elements]);
-
-    // Auto-focus text input
-    useEffect(() => {
-        if (textInput && textInputRef.current) {
-            textInputRef.current.focus();
-        }
-    }, [textInput]);
-
-
-    // Auto-focus text input
-    useEffect(() => {
-        if (textInput && textInputRef.current) {
-            textInputRef.current.focus();
-        }
-    }, [textInput]);
-
-
-    // MAIN RENDER FUNCTION (Extracted for direct access)
-    const renderCanvas = (currentTransform: { x: number, y: number, scale: number }) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        // Clear Screen
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Apply Viewport Transform
-        ctx.save();
-        ctx.setTransform(currentTransform.scale, 0, 0, currentTransform.scale, currentTransform.x, currentTransform.y);
-
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        // Calculate Viewport AABB (Logical Coordinates)
-        const viewport = {
-            x: -currentTransform.x / currentTransform.scale,
-            y: -currentTransform.y / currentTransform.scale,
-            width: canvas.width / currentTransform.scale,
-            height: canvas.height / currentTransform.scale
-        };
-
-        // Query Quadtree
-        const visibleElements = quadtreeRef.current.query(viewport);
-
-        // Draw Visible Elements
-        visibleElements.forEach(el => {
-            const isSelected = selectedIds.has(el.id);
-            ctx.strokeStyle = isSelected ? '#3b82f6' : el.color;
-            ctx.fillStyle = el.color;
-            const elWidth = el.type === 'text' ? 0 : el.width;
-            if (isSelected) ctx.shadowBlur = 5; else ctx.shadowBlur = 0;
-            ctx.shadowColor = '#3b82f6';
-
-            // Adaptive Line Width for Zoom (Minimum 0.5px visual width)
-            const minLineWidth = 0.5 / currentTransform.scale;
-            let finalWidth = isSelected ? (elWidth + 2) : elWidth;
-            if (finalWidth < minLineWidth) finalWidth = minLineWidth;
-            ctx.lineWidth = finalWidth;
-
-            if (el.type === 'stroke') {
-                drawSmoothStroke(ctx, el.points);
-            } else if (el.type === 'line') {
-                const { start, end } = el.params;
-                ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.lineTo(end.x, end.y); ctx.stroke();
-            } else if (el.type === 'circle') {
-                const { x, y, radius } = el.params;
-                ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke();
-            } else if (el.type === 'rect') {
-                const { x, y, width, height } = el.params;
-                ctx.strokeRect(x, y, width, height);
-            } else if (el.type === 'text') {
-                ctx.font = `${el.fontSize}px sans-serif`;
-                ctx.fillStyle = 'black';
-                ctx.fillText(el.content, el.x, el.y);
-
-                if (isSelected) {
-                    const metrics = ctx.measureText(el.content);
-                    const h = el.fontSize;
-                    ctx.save();
-                    ctx.strokeStyle = '#3b82f6';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(el.x - 2, el.y - h, metrics.width + 4, h + 4);
-                    ctx.restore();
-                }
-            }
-
-            // Link Indicators
-            if (el.link && mode === 'view') {
-                const LINK_COLOR = '#0ea5e9';
-                if (el.type === 'text') {
-                    ctx.fillStyle = LINK_COLOR;
-                    ctx.fillText(el.content, el.x, el.y);
-                    // Underline
-                    const metrics = ctx.measureText(el.content);
-                    ctx.beginPath(); ctx.moveTo(el.x, el.y + 4); ctx.lineTo(el.x + metrics.width, el.y + 4);
-                    ctx.strokeStyle = LINK_COLOR; ctx.lineWidth = 2; ctx.stroke();
-                } else {
-                    ctx.save();
-                    ctx.strokeStyle = LINK_COLOR;
-                    if (el.type === 'rect') ctx.strokeRect(el.params.x, el.params.y, el.params.width, el.params.height);
-                    else if (el.type === 'circle') { ctx.beginPath(); ctx.arc(el.params.x, el.params.y, el.params.radius, 0, Math.PI * 2); ctx.stroke(); }
-                    else if (el.type === 'line') { ctx.beginPath(); ctx.moveTo(el.params.start.x, el.params.start.y); ctx.lineTo(el.params.end.x, el.params.end.y); ctx.stroke(); }
-                    else if (el.type === 'stroke') drawSmoothStroke(ctx, el.points);
-                    ctx.restore();
-                }
-            } else if (el.link && el.type === 'text') {
-                // Edit Mode Underline
-                const metrics = ctx.measureText(el.content);
-                ctx.beginPath(); ctx.moveTo(el.x, el.y + 4); ctx.lineTo(el.x + metrics.width, el.y + 4);
-                ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.stroke();
-            }
-        });
-
-        // Draw Current Stroke
-        const stroke = currentStrokeRef.current;
-        if (stroke.length > 0) {
-            ctx.strokeStyle = mode === 'eraser' ? '#ff0000' : 'black';
-            let strokeWidth = mode === 'eraser' ? eraserWidth : penWidth;
-            // Adaptive width for current stroke
-            const minLineWidth = 0.5 / currentTransform.scale;
-            if (strokeWidth < minLineWidth) strokeWidth = minLineWidth;
-
-            ctx.lineWidth = strokeWidth;
-            if (mode === 'eraser') ctx.globalAlpha = 0.5;
-
-            if (stroke.length < 2) {
-                ctx.beginPath(); ctx.moveTo(stroke[0].x, stroke[0].y); ctx.stroke();
-            } else {
-                drawSmoothStroke(ctx, stroke);
-            }
-            ctx.globalAlpha = 1.0;
-        }
-
-        // Draw Lasso Path
-        if (lassoPath.length > 0) {
-            ctx.save();
-            ctx.strokeStyle = '#3b82f6';
-            ctx.lineWidth = 1 / currentTransform.scale;
-            ctx.setLineDash([5 / currentTransform.scale, 5 / currentTransform.scale]);
-            ctx.beginPath();
-            ctx.moveTo(lassoPath[0].x, lassoPath[0].y);
-            for (let i = 1; i < lassoPath.length; i++) {
-                ctx.lineTo(lassoPath[i].x, lassoPath[i].y);
-            }
-            ctx.stroke();
-            ctx.restore();
-        }
-
-        // Draw Transform Bounds & Handles (if selecting)
-        if (mode === 'select' && selectedIds.size > 0) {
-            const bounds = getSelectionBounds();
-            if (bounds) {
-                const { x, y, w, h } = bounds;
-                ctx.save();
-                ctx.strokeStyle = '#3b82f6';
-                ctx.lineWidth = 1 / currentTransform.scale;
-                ctx.setLineDash([4 / currentTransform.scale, 4 / currentTransform.scale]);
-                ctx.strokeRect(x, y, w, h);
-
-                // Handles
-                const HANDLE_SIZE = 8 / currentTransform.scale;
-                ctx.fillStyle = 'white';
-                ctx.setLineDash([]);
-
-                const drawHandle = (hx: number, hy: number) => {
-                    ctx.fillRect(hx - HANDLE_SIZE / 2, hy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
-                    ctx.strokeRect(hx - HANDLE_SIZE / 2, hy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
-                };
-
-                drawHandle(x, y); // NW
-                drawHandle(x + w, y); // NE
-                drawHandle(x + w, y + h); // SE
-                drawHandle(x, y + h); // SW
-                drawHandle(x + w / 2, y - 40 / currentTransform.scale); // Rotate
-
-                // Connector to rotate handle
-                ctx.beginPath();
-                ctx.moveTo(x + w / 2, y);
-                ctx.lineTo(x + w / 2, y - 40 / currentTransform.scale);
-                ctx.stroke();
-
-                ctx.restore();
-            }
-        }
-
-        ctx.restore(); // End Viewport Transform
-    };
-
-    // React Render Loop (Low frequency or logic updates)
-    useEffect(() => {
-        renderCanvas(transform);
-    }, [elements, mode, transform, lassoPath, selectedIds, penWidth, eraserWidth, tick]);
 
 
     const renderContentView = () => {
@@ -1102,11 +869,14 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         className="text-blue-600 underline cursor-pointer hover:text-blue-800"
                         onClick={async (e) => {
                             e.stopPropagation();
-                            // Open Action Dialog
-                            setLinkActionState({
-                                isOpen: true,
-                                target: { type: 'text', content: content } // No ID for text content replace yet, usage needs care
-                            });
+                            const action = await onLinkClick(content, currentFolderId);
+                            if (action === 'DELETE') {
+                                // Remove this link syntax from text content
+                                // This is a bit brute-force, replacing ALL instances of this specific link
+                                // But since there's no unique ID for text parts, it's the safest assumption
+                                const linkStr = `[[${content}]]`;
+                                setNoteContent(prev => prev.replaceAll(linkStr, content)); // Keep content, remove brackets
+                            }
                         }}
                     >
                         {content}
@@ -1117,9 +887,20 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
         });
     };
 
+    // Delete Selected
+    const onDelete = () => {
+        if (selectedIds.size > 0) {
+            setElements(prev => prev.filter(el => !selectedIds.has(el.id)));
+            setSelectedIds(new Set());
+        }
+    };
+
 
     return (
         <div className="flex flex-col h-full bg-white relative overflow-hidden">
+            {/* Update Toast */}
+
+
             {/* Toolbar (Fixed) */}
             <div className="flex items-center gap-2 p-2 px-4 border-b bg-muted/20 z-50 overflow-x-auto shrink-0 relative shadow-sm">
                 <button onClick={onBack} className="p-2 hover:bg-muted text-sm font-bold flex items-center gap-1">Back</button>
@@ -1176,7 +957,7 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
 
                 {/* Extra Tools */}
                 <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
-
+                <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
 
                 <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
@@ -1193,29 +974,16 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 onPointerUp={onPointerUp}
                 onPointerLeave={onPointerUp}
             >
-                {/* 
-                   Canvas Layer 
-                   Now occupies full container, handles all vector rendering with viewport transform
-                */}
-                <canvas
-                    ref={canvasRef}
-                    className="absolute inset-0 pointer-events-none"
-                    style={{ width: '100%', height: '100%' }}
-                />
-
-                {/* 
-                   DOM Layer (Transform applied via CSS)
-                   For Text Input Overlay and Backround Text (Legacy)
-                */}
+                {/* Transformed Layer */}
                 <div
-                    ref={domLayerRef}
                     style={{
                         transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                         transformOrigin: '0 0',
-                        width: MAX_CANVAS_SIZE.width,
-                        height: MAX_CANVAS_SIZE.height,
+                        width: PAGE_SIZE.width,
+                        height: PAGE_SIZE.height,
                         willChange: 'transform',
-                        pointerEvents: 'none' // Let clicks pass to container, but enable for inputs
+                        backgroundColor: 'white',
+                        boxShadow: '0 0 20px rgba(0,0,0,0.1)'
                     }}
                 >
                     {/* Background Text Note (Legacy/Underlay) */}
@@ -1223,14 +991,22 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                         {renderContentView()}
                     </div>
 
-                    {/* Text Input Overlay */}
+
+                    <canvas
+                        ref={canvasRef}
+                        className={cn("absolute inset-0 pointer-events-none")}
+                    />
+
+                    {/* Text Input Overlay (Transformed space) */}
+                    {/* Move AFTER the canvas to ensure it is on top for clicks, but canvas has pointer-events-none so it is fine either way. 
+                         However, visually, we want text input on top of strokes. */}
                     {textInput && (
                         <textarea
                             ref={textInputRef}
                             style={{
                                 position: 'absolute',
                                 left: textInput.x,
-                                top: textInput.y - fontSize,
+                                top: textInput.y - fontSize, // Adjust for baseline to match canvas text
                                 fontSize: fontSize + 'px',
                                 minWidth: '100px',
                                 color: 'black',
@@ -1241,73 +1017,22 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                                 overflow: 'hidden',
                                 height: (fontSize * 1.5) + 'px',
                                 whiteSpace: 'nowrap',
-                                zIndex: 100,
+                                zIndex: 100, // Explicit High Z-Index
                                 fontFamily: 'sans-serif',
-                                lineHeight: '1',
-                                pointerEvents: 'auto' // Re-enable pointer events for input
+                                lineHeight: '1'
                             }}
                             value={textInput.text}
                             onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                            onPointerDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()} // Let us type
                         />
                     )}
                 </div>
 
                 {/* Info Overlay */}
-                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none z-50">
+                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded pointer-events-none">
                     {Math.round(transform.scale * 100)}%
                 </div>
             </div>
-
-            {/* Link Dialog */}
-            <LinkDialog
-                isOpen={isLinkDialogOpen}
-                onClose={() => setIsLinkDialogOpen(false)}
-                onSelect={handleLinkSelect}
-                onCreate={handleLinkCreate}
-                currentFolderId={currentFolderId}
-                excludeNoteId={noteId}
-            />
-            <LinkActionDialog
-                isOpen={!!linkActionState?.isOpen}
-                onClose={() => setLinkActionState(null)}
-                linkTitle={linkActionState?.target?.content || ''}
-                onNavigate={async () => {
-                    if (linkActionState?.target?.content) {
-                        const action = await onLinkClick(linkActionState.target.content, currentFolderId);
-                        if (action === 'DELETE') {
-                            const target = linkActionState.target;
-                            if (target.type === 'element' && target.id) {
-                                setElements(prev => prev.map(item => {
-                                    if (item.id === target.id) {
-                                        const { link, ...rest } = item;
-                                        return rest;
-                                    }
-                                    return item;
-                                }));
-                            } else if (target.type === 'text') {
-                                const linkStr = `[[${target.content}]]`;
-                                setNoteContent(prev => prev.replaceAll(linkStr, target.content));
-                            }
-                        }
-                    }
-                }}
-                onEdit={() => {
-                    setIsLinkDialogOpen(true);
-                    // Note: We are keeping linkActionState active or should we?
-                    // Actually we need to know what we are editing when handleLinkSelect is called.
-                    // But handleLinkSelect currently uses 'selectedIds'.
-                    // We need to update handleLinkSelect/Create to support explicit target.
-                    // For now, let's just Open the dialog. The ActionDialog will close (via onClose above? No, onEdit calls onClose).
-                    // Wait, onEdit prop in LinkActionDialog calls onClose AND onEdit.
-                    // So here we open LinkDialog.
-                    // IMPORTANT: We need to set a state to know we are UPDATING THIS target.
-                    // Let's reuse 'linkActionState' or create 'pendingLinkTarget'.
-                    // Since linkActionDialog is closed, linkActionState might be set to null.
-                    // We should modify 'onClose' behavior or use a separate state.
-                }}
-            />
         </div>
-
     );
 };

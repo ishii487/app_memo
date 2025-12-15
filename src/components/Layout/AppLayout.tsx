@@ -14,31 +14,41 @@ interface AppLayoutProps {
 export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, onSelectFolder, title = "Memo App", onTitleClick }) => {
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
+    // Sync --app-height with window.innerHeight for true fullscreen on mobile
+    React.useEffect(() => {
+        const setAppHeight = () => {
+            document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+        };
+        setAppHeight();
+        window.addEventListener('resize', setAppHeight);
+        return () => window.removeEventListener('resize', setAppHeight);
+    }, []);
+
     return (
-        <div className="flex h-[100dvh] w-full bg-background text-foreground overflow-hidden relative transition-colors duration-300">
+        <div className="flex h-full w-full bg-background text-foreground overflow-hidden relative transition-colors duration-300" style={{ height: 'var(--app-height, 100dvh)' }}>
             {/* Mobile Sidebar Overlay */}
             {isSidebarOpen && (
                 <div
-                    className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 xl:hidden"
+                    className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 md:hidden"
                     onClick={() => setSidebarOpen(false)}
                 />
             )}
 
             {/* Sidebar */}
             <aside className={cn(
-                "fixed xl:relative z-50 w-72 h-full bg-card border-r border-border transition-transform duration-300 ease-in-out xl:translate-x-0 shadow-xl xl:shadow-none",
+                "fixed md:relative z-50 w-72 h-full bg-card border-r border-border transition-transform duration-300 ease-in-out md:translate-x-0 shadow-xl md:shadow-none",
                 isSidebarOpen ? "translate-x-0" : "-translate-x-full"
             )}>
-                <div className="p-4 border-b border-border flex items-center justify-between xl:hidden">
+                <div className="p-4 border-b border-border flex items-center justify-between md:hidden">
                     <span className="font-bold text-lg">Menu</span>
                     <button onClick={() => setSidebarOpen(false)} className="p-2 hover:bg-accent rounded-md">
                         <X size={20} />
                     </button>
                 </div>
 
-                <div className="h-full pt-4 xl:pt-2">
+                <div className="h-full pt-4 md:pt-2">
                     {/* Logo or Title Area for Desktop */}
-                    <div className="hidden xl:flex items-center px-4 py-3 mb-2">
+                    <div className="hidden md:flex items-center px-4 py-3 mb-2">
                         <div className="w-8 h-8 bg-primary rounded-lg mr-3 flex items-center justify-center font-bold text-primary-foreground">M</div>
                         <span className="font-bold text-xl tracking-tight">Memo</span>
                     </div>
@@ -55,7 +65,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
             {/* Main Content */}
             <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full bg-background">
                 {/* Mobile Header */}
-                <header className="xl:hidden flex items-center p-4 border-b border-border bg-card/50 backdrop-blur">
+                <header className="md:hidden flex items-center p-4 border-b border-border bg-card/50 backdrop-blur">
                     <button onClick={() => setSidebarOpen(true)} className="mr-4 p-2 -ml-2 hover:bg-accent rounded-md">
                         <Menu size={24} />
                     </button>
