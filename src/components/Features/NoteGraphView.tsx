@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import type { Note } from '../../db/db';
 import { extractLinks, type GraphData, type GraphNode, type GraphEdge } from '../../utils/graphUtils';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { Maximize2, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface NoteGraphViewProps {
@@ -19,7 +19,6 @@ const DT = 0.5; // Smaller time step for stability
 
 export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNote }) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    // Use layout refs to avoid re-triggering effects on resize frequently, but state is needed for render
     const [dimensions, setDimensions] = useState({ width: 0, height: 300 }); // Initial height
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
     const [isExpanded, setIsExpanded] = useState(false);
@@ -99,6 +98,7 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
 
     // Initialize Graph Data with Pre-computation
     useEffect(() => {
+        if (!notes || notes.length === 0) return;
         const data = extractLinks(notes);
 
         // Initial Random Positions
@@ -120,10 +120,36 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
             runPhysicsTick(data.nodes, data.edges);
         }
 
-        setGraphData(data);
+        // Find Hub Node (Max Connections) to center view
+        let maxDegree = -1;
+        let hubNode: GraphNode | null = null;
+        const degreeMap = new Map<string, number>();
+        data.edges.forEach(e => {
+            degreeMap.set(e.source, (degreeMap.get(e.source) || 0) + 1);
+            degreeMap.set(e.target, (degreeMap.get(e.target) || 0) + 1);
+        });
 
-        // Reset view center
-        setTransform(prev => ({ ...prev, x: 0, y: 0, scale: 1 }));
+        data.nodes.forEach(n => {
+            const deg = degreeMap.get(n.id) || 0;
+            if (deg > maxDegree) {
+                maxDegree = deg;
+                hubNode = n;
+            }
+        });
+
+        let initialX = 0;
+        let initialY = 0;
+
+        if (hubNode) {
+            const h = hubNode as GraphNode;
+            if (h.x !== undefined && h.y !== undefined) {
+                initialX = -h.x;
+                initialY = -h.y;
+            }
+        }
+
+        setGraphData(data);
+        setTransform(prev => ({ ...prev, x: initialX, y: initialY, scale: 1 }));
     }, [notes, runPhysicsTick]);
 
     // Resize Handler
@@ -154,8 +180,6 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
             runPhysicsTick(graphData.nodes, graphData.edges);
 
             // Force re-render to update positions
-            // We use spread to trigger state update, but optimization might be needed if too many nodes.
-            // For now, this is fine for < 100 nodes.
             setGraphData(prev => ({ ...prev }));
 
             animationFrameId = requestAnimationFrame(simulate);
@@ -167,12 +191,14 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
 
     // Interaction Handlers
     const handlePointerDown = (e: React.PointerEvent) => {
+        e.stopPropagation(); // Stop propagation to prevent immediate re-expansion if closing
         containerRef.current?.setPointerCapture(e.pointerId);
         setIsDragging(true);
         lastPos.current = { x: e.clientX, y: e.clientY };
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
+        e.stopPropagation();
         if (isDragging) {
             const dx = e.clientX - lastPos.current.x;
             const dy = e.clientY - lastPos.current.y;
@@ -187,10 +213,8 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
     };
 
     // Toggle Expand
-    const toggleExpand = () => {
-        setIsExpanded(!isExpanded);
-        // Slightly reset zoom or ensure center is visible? 
-        // Let's just keep transform.
+    const toggleExpand = (expanded: boolean) => {
+        setIsExpanded(expanded);
     };
 
     if (graphData.nodes.length === 0) return null;
@@ -203,10 +227,11 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         <div
             ref={containerRef}
             className={cn(
-                "w-full bg-slate-50 border-b border-border overflow-hidden relative transition-all duration-300 ease-in-out touch-none",
-                isExpanded ? "h-[60vh] max-h-[600px]" : "h-[200px]"
+                "bg-slate-50 border-b border-border overflow-hidden relative transition-all duration-300 ease-in-out touch-none",
+                isExpanded ? "fixed inset-0 z-50 h-screen w-screen" : "w-full h-[200px]"
             )}
-            onPointerDown={handlePointerDown}
+            onClick={() => !isExpanded && toggleExpand(true)}
+            onPointerDown={(e) => isExpanded && handlePointerDown(e)} // Only handle drag here if expanded? No, always if draggable
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
@@ -217,15 +242,31 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
                 </div>
             </div>
 
-            <button
-                onClick={(e) => { e.stopPropagation(); toggleExpand(); }}
-                className="absolute top-2 right-2 p-1.5 bg-white/80 hover:bg-white rounded-md shadow-sm border border-slate-200 z-10 transition-colors"
-                title={isExpanded ? "Minimize" : "Maximize"}
-            >
-                {isExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
+            {/* Expand/Close Button */}
+            {isExpanded ? (
+                <button
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(false); }}
+                    className="absolute top-2 right-2 p-2 bg-white/90 hover:bg-white rounded-full shadow-md border border-slate-200 z-50 text-slate-700 hover:text-red-500 transition-colors"
+                    title="Close"
+                >
+                    <X size={24} />
+                </button>
+            ) : (
+                <button
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(true); }}
+                    className="absolute top-2 right-2 p-1.5 bg-white/80 hover:bg-white rounded-md shadow-sm border border-slate-200 z-10 transition-colors"
+                    title="Maximize"
+                >
+                    <Maximize2 size={16} />
+                </button>
+            )}
 
-            <svg width="100%" height="100%" className="w-full h-full cursor-grab active:cursor-grabbing">
+            <svg
+                width="100%"
+                height="100%"
+                className={cn("w-full h-full", isExpanded ? "cursor-grab active:cursor-grabbing" : "cursor-pointer")} // Pointer cursor when small to indicate click-to-expand
+                onPointerDown={handlePointerDown} // Attach drag logic here too
+            >
                 <defs>
                     <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="22" refY="3.5" orient="auto">
                         <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
@@ -254,8 +295,8 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
                         <g
                             key={node.id}
                             transform={`translate(${node.x}, ${node.y})`}
-                            onClick={(e) => { e.stopPropagation(); if (!isDragging) onSelectNote(node.id); }}
-                            className="cursor-pointer hover:opacity-80 transition-opacity"
+                            onClick={(e) => { e.stopPropagation(); if (!isDragging && isExpanded) onSelectNote(node.id); }}
+                            className={cn("transition-opacity", isExpanded ? "cursor-pointer hover:opacity-80" : "")}
                         >
                             <circle r="18" fill="white" stroke="#3b82f6" strokeWidth="2" className="drop-shadow-sm" />
                             <text
@@ -272,12 +313,13 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
                     ))}
                 </g>
             </svg>
+
             {/* Hint Overlay (only when small) */}
             {!isExpanded && (
                 <div
-                    className="absolute inset-0 flex items-center justify-center bg-black/0 hover:bg-black/5 transition-colors pointer-events-none"
+                    className="absolute inset-0 flex items-center justify-center bg-transparent pointer-events-none"
                 >
-                    {/* Optional: Add a subtle overlay or hint that it's interactive */}
+                    {/* Transparent overlay to catch taps if svg doesn't? No, container onClick handles it. */}
                 </div>
             )}
         </div>
