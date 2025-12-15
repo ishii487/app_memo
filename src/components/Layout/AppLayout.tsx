@@ -9,9 +9,10 @@ interface AppLayoutProps {
     onSelectFolder: (id: string | null) => void;
     title?: string;
     onTitleClick?: () => void;
+    hideSidebar?: boolean;
 }
 
-export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, onSelectFolder, title = "Memo App", onTitleClick }) => {
+export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, onSelectFolder, title = "Memo App", onTitleClick, hideSidebar = false }) => {
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     // Sync --app-height with window.innerHeight for true fullscreen on mobile
@@ -36,8 +37,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, activeFolderId, 
 
             {/* Sidebar */}
             <aside className={cn(
-                "fixed md:relative z-50 w-72 h-full bg-card border-r border-border transition-transform duration-300 ease-in-out md:translate-x-0 shadow-xl md:shadow-none",
-                isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+                "fixed z-50 w-72 h-full bg-card border-r border-border transition-all duration-300 ease-in-out shadow-xl md:shadow-none",
+                // Mobile behavior: slide in/out
+                isSidebarOpen ? "translate-x-0" : "-translate-x-full",
+                // Desktop behavior:
+                // If hideSidebar is true: absolute and hidden (or translated out)
+                // If hideSidebar is false: static (relative) and visible
+                hideSidebar ? "absolute -translate-x-full md:hidden" : "md:relative md:translate-x-0"
             )}>
                 <div className="p-4 border-b border-border flex items-center justify-between md:hidden">
                     <span className="font-bold text-lg">Menu</span>

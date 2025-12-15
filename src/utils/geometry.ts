@@ -74,3 +74,46 @@ export function recognizeShape(points: Point[]): { type: 'line' | 'rect' | 'circ
 
     return null;
 }
+
+export interface Rectangle { x: number; y: number; width: number; height: number; }
+
+export function getBounds(element: DrawingElement): Rectangle {
+    if (element.type === 'stroke') {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        if (element.points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
+        for (const p of element.points) {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        }
+        // Add stroke width padding
+        const padding = element.width / 2;
+        return { x: minX - padding, y: minY - padding, width: maxX - minX + element.width, height: maxY - minY + element.width };
+    } else if (element.type === 'line') {
+        const { start, end } = element.params;
+        const minX = Math.min(start.x, end.x);
+        const maxX = Math.max(start.x, end.x);
+        const minY = Math.min(start.y, end.y);
+        const maxY = Math.max(start.y, end.y);
+        const padding = element.width / 2;
+        return { x: minX - padding, y: minY - padding, width: maxX - minX + element.width, height: maxY - minY + element.width };
+    } else if (element.type === 'rect') {
+        const { x, y, width, height } = element.params;
+        const padding = element.width / 2;
+        return { x: x - padding, y: y - padding, width: width + element.width, height: height + element.width };
+    } else if (element.type === 'circle') {
+        const { x, y, radius } = element.params;
+        const padding = element.width / 2;
+        const size = (radius + padding) * 2;
+        return { x: x - radius - padding, y: y - radius - padding, width: size, height: size };
+    } else if (element.type === 'text') {
+        // Approximate bounds for text (since we don't have measureText here)
+        // Assume rough aspect ratio or logic.
+        // Or updated externally? For now, simple approximation:
+        const approximateWidth = element.content.length * (element.fontSize * 0.6);
+        const approximateHeight = element.fontSize * 1.2;
+        return { x: element.x, y: element.y - element.fontSize, width: approximateWidth, height: approximateHeight };
+    }
+    return { x: 0, y: 0, width: 0, height: 0 };
+}

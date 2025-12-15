@@ -10,12 +10,21 @@ interface NoteGraphViewProps {
 }
 
 // Physics Parameters
-const REPULSION = 6000; // Increased from 2000 for much wider spread
-const SPRING_LENGTH = 200; // Increased from 120
+<<<<<<< HEAD
+const REPULSION = 8000; // Increased significantly for sparse layout
+const SPRING_LENGTH = 250; // Increased length
+const SPRING_STRENGTH = 0.04; // Slightly looser
+const CENTERING_STRENGTH = 0.005; // Weaker centering to allow spread
+const FRICTION = 0.90;
+const DT = 0.5;
+=======
+const REPULSION = 2000; // Stronger repulsion for clearer spread
+const SPRING_LENGTH = 120;
 const SPRING_STRENGTH = 0.05;
-const CENTERING_STRENGTH = 0.01;
-const FRICTION = 0.90; // Less drag to allow them to fly apart faster initially? No, stability is key. Keep similar or adjust.
+const CENTERING_STRENGTH = 0.01; // Slightly stronger centering
+const FRICTION = 0.85; // More friction for stability
 const DT = 0.5; // Smaller time step for stability
+>>>>>>> parent of b2d5074 (feat:マインドマップ追加機能)
 
 export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNote }) => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -23,10 +32,19 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
     const [isExpanded, setIsExpanded] = useState(false);
 
+    // Highlight State
+    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+
     // Zoom & Pan State
     const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const [isDragging, setIsDragging] = useState(false);
     const lastPos = useRef({ x: 0, y: 0 });
+
+    // Interaction State
+    const draggingNodeRef = useRef<string | null>(null);
+    const isNodeDraggingRef = useRef(false);
+
+
 
     // Physics Logic (Pure function style for re-use)
     const runPhysicsTick = useCallback((nodes: GraphNode[], edges: GraphEdge[]) => {
@@ -84,6 +102,14 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         nodes.forEach(node => {
             if (node.x === undefined) node.x = 0;
             if (node.y === undefined) node.y = 0;
+
+            // Skip integration for dragged node
+            if (node.id === draggingNodeRef.current) {
+                node.vx = 0;
+                node.vy = 0;
+                return;
+            }
+
             // Pull towards (0,0) - which is relative center
             node.vx = (node.vx || 0) - node.x * CENTERING_STRENGTH;
             node.vy = (node.vy || 0) - node.y * CENTERING_STRENGTH;
@@ -106,7 +132,11 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         data.nodes.forEach((node, i) => {
             // Spiral or random
             const angle = i * 0.5;
-            const radius = 200 + i * 15; // Increased spread: 50 -> 200, i*5 -> i*15
+<<<<<<< HEAD
+            const radius = 300 + i * 20; // Even wider spread
+=======
+            const radius = 50 + i * 5;
+>>>>>>> parent of b2d5074 (feat:マインドマップ追加機能)
             node.x = Math.cos(angle) * radius;
             node.y = Math.sin(angle) * radius;
             node.vx = 0;
@@ -114,8 +144,7 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
         });
 
         // Pre-tick calculation to stabilize (prevent "exploding" on load)
-        // Reduced from 150 to 10 to prevent UI blocking/freezing on navigation
-        const iterations = 10;
+        const iterations = 150;
 
         for (let i = 0; i < iterations; i++) {
             runPhysicsTick(data.nodes, data.edges);
@@ -194,15 +223,50 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
     const handlePointerDown = (e: React.PointerEvent) => {
         e.stopPropagation(); // Stop propagation to prevent immediate re-expansion if closing
         containerRef.current?.setPointerCapture(e.pointerId);
-        setIsDragging(true);
+
+        // Check if clicked on a node? 
+        // Logic handled in Node's onPointerDown below, so here acts as View Drag start.
+        // But if node stops propagation, this won't fire?
+        // Let's rely on event bubbling separation or explicit checks.
+        // If we attach onPointerDown to SVG background, it works.
+        // Current structure: Container has onPointerDown. Node has onClick.
+        // If we add onPointerDown to Node, it will bubble to Container unless stopped.
+
+        setIsDragging(true); // View Drag
+        lastPos.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const handleNodePointerDown = (e: React.PointerEvent, nodeId: string) => {
+        e.stopPropagation();
+        e.preventDefault(); // Prevent text selection etc
+        containerRef.current?.setPointerCapture(e.pointerId);
+        draggingNodeRef.current = nodeId;
+        isNodeDraggingRef.current = false; // Reset drag flag
         lastPos.current = { x: e.clientX, y: e.clientY };
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
         e.stopPropagation();
-        if (isDragging) {
-            const dx = e.clientX - lastPos.current.x;
-            const dy = e.clientY - lastPos.current.y;
+
+        const dx = e.clientX - lastPos.current.x;
+        const dy = e.clientY - lastPos.current.y;
+
+        if (draggingNodeRef.current) {
+            // Node Drag
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+                isNodeDraggingRef.current = true;
+            }
+            const node = graphData.nodes.find(n => n.id === draggingNodeRef.current);
+            if (node && node.x !== undefined && node.y !== undefined) {
+                // Adjust dx/dy by scale to map to graph space
+                node.x += dx / transform.scale;
+                node.y += dy / transform.scale;
+                // Force update
+                setGraphData(prev => ({ ...prev }));
+            }
+            lastPos.current = { x: e.clientX, y: e.clientY };
+        } else if (isDragging) {
+            // View Drag
             setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
             lastPos.current = { x: e.clientX, y: e.clientY };
         }
@@ -211,7 +275,9 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
     const handlePointerUp = (e: React.PointerEvent) => {
         containerRef.current?.releasePointerCapture(e.pointerId);
         setIsDragging(false);
+        draggingNodeRef.current = null;
     };
+
 
     // Toggle Expand
     const toggleExpand = (expanded: boolean) => {
@@ -223,6 +289,14 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
     // View Center
     const viewCenterX = dimensions.width / 2;
     const viewCenterY = dimensions.height / 2;
+
+    // Helper to check connections for highlight
+    const isConnected = (nodeId: string, targetId: string) => {
+        return graphData.edges.some(e =>
+            (e.source === nodeId && e.target === targetId) ||
+            (e.target === nodeId && e.source === targetId)
+        );
+    };
 
     return (
         <div
@@ -279,39 +353,67 @@ export const NoteGraphView: React.FC<NoteGraphViewProps> = ({ notes, onSelectNot
                         const source = graphData.nodes.find(n => n.id === edge.source);
                         const target = graphData.nodes.find(n => n.id === edge.target);
                         if (!source || !target) return null;
+
+                        const isHighlighted = hoveredNodeId && (edge.source === hoveredNodeId || edge.target === hoveredNodeId);
+                        const isDimmed = hoveredNodeId && !isHighlighted;
+
                         return (
                             <line
                                 key={i}
                                 x1={source.x} y1={source.y}
                                 x2={target.x} y2={target.y}
-                                stroke="#cbd5e1"
-                                strokeWidth="2"
-                                markerEnd="url(#arrowhead)"
+                                stroke={isHighlighted ? "#3b82f6" : "#cbd5e1"}
+                                strokeWidth={isHighlighted ? "3" : "1.5"}
+                                strokeOpacity={isDimmed ? 0.1 : (isHighlighted ? 1 : 0.4)}
+                                markerEnd={isHighlighted ? "url(#arrowhead)" : undefined}
+                                className="transition-all duration-300"
                             />
                         );
                     })}
 
                     {/* Nodes */}
-                    {graphData.nodes.map(node => (
-                        <g
-                            key={node.id}
-                            transform={`translate(${node.x}, ${node.y})`}
-                            onClick={(e) => { e.stopPropagation(); if (!isDragging && isExpanded) onSelectNote(node.id); }}
-                            className={cn("transition-opacity", isExpanded ? "cursor-pointer hover:opacity-80" : "")}
-                        >
-                            <circle r="18" fill="white" stroke="#3b82f6" strokeWidth="2" className="drop-shadow-sm" />
-                            <text
-                                dy="30"
-                                textAnchor="middle"
-                                className="text-[10px] fill-slate-700 font-medium pointer-events-none select-none"
+                    {graphData.nodes.map(node => {
+                        const isHovered = hoveredNodeId === node.id;
+                        const isRelated = hoveredNodeId && isConnected(hoveredNodeId, node.id);
+                        const isDimmed = hoveredNodeId && !isHovered && !isRelated;
+
+                        return (
+                            <g
+                                key={node.id}
+                                transform={`translate(${node.x}, ${node.y})`}
+                                onClick={(e) => { e.stopPropagation(); if (!isNodeDraggingRef.current && isExpanded) onSelectNote(node.id); }}
+                                onPointerDown={(e) => handleNodePointerDown(e, node.id)}
+                                onPointerEnter={() => setHoveredNodeId(node.id)}
+                                onPointerLeave={() => setHoveredNodeId(null)}
+                                className={cn(
+                                    "transition-opacity duration-300",
+                                    isExpanded ? "cursor-grab active:cursor-grabbing" : "",
+                                    isDimmed ? "opacity-20" : "opacity-100"
+                                )}
                             >
-                                {node.title.length > 8 ? node.title.substring(0, 8) + '...' : node.title}
-                            </text>
-                            <text dy="4" textAnchor="middle" className="text-xs font-bold fill-blue-600 pointer-events-none select-none">
-                                {node.title.charAt(0)}
-                            </text>
-                        </g>
-                    ))}
+                                <circle
+                                    r={isHovered ? "22" : "18"}
+                                    fill="white"
+                                    stroke={isHovered || isRelated ? "#3b82f6" : "#cbd5e1"}
+                                    strokeWidth={isHovered ? "3" : "2"}
+                                    className="drop-shadow-sm transition-all duration-300"
+                                />
+                                <text
+                                    dy="30"
+                                    textAnchor="middle"
+                                    className={cn(
+                                        "text-[10px] font-medium pointer-events-none select-none transition-all",
+                                        isHovered ? "fill-blue-700 font-bold scale-110" : "fill-slate-700"
+                                    )}
+                                >
+                                    {node.title.length > 8 ? node.title.substring(0, 8) + '...' : node.title}
+                                </text>
+                                <text dy="4" textAnchor="middle" className="text-xs font-bold fill-blue-600 pointer-events-none select-none">
+                                    {node.title.charAt(0)}
+                                </text>
+                            </g>
+                        )
+                    })}
                 </g>
             </svg>
 

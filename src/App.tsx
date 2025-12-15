@@ -125,6 +125,7 @@ function App() {
       }}
       title={activeNoteId ? activeNoteTitle : (activeFolderId ? "フォルダ" : "すべてのメモ")}
       onTitleClick={activeNoteId ? handleRenameTitle : undefined}
+      hideSidebar={!!activeNoteId}
     >
       {activeNoteId ? (
         <MemoEditor
