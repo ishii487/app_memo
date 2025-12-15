@@ -60,18 +60,56 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
     const initialScale = useRef<number>(1);
     const lastCenter = useRef<{ x: number, y: number } | null>(null);
 
+    // History (Undo/Redo)
+    const [history, setHistory] = useState<DrawingElement[][]>([]);
+    const [historyStep, setHistoryStep] = useState(0);
 
-
+    // Initial load handling
     useEffect(() => {
         db.notes.get(noteId).then(n => {
             if (n) {
                 setTitle(n.title || '');
                 setNoteContent(n.content || '');
-                if (n.drawings) setElements(n.drawings);
+                if (n.drawings) {
+                    setElements(n.drawings);
+                    setHistory([n.drawings]); // Initial history state
+                    setHistoryStep(0);
+                } else {
+                    setHistory([[]]);
+                    setHistoryStep(0);
+                }
                 setCurrentFolderId(n.folderId || 'root');
             }
         });
     }, [noteId]);
+
+    // Push to history
+    const pushHistory = (newElements: DrawingElement[]) => {
+        const newHistory = history.slice(0, historyStep + 1);
+        newHistory.push(newElements);
+        // Limit history size if needed (e.g. 50 steps)
+        if (newHistory.length > 50) newHistory.shift();
+
+        setHistory(newHistory);
+        setHistoryStep(newHistory.length - 1);
+        setElements(newElements);
+    };
+
+    const handleUndo = () => {
+        if (historyStep > 0) {
+            const prevStep = historyStep - 1;
+            setHistoryStep(prevStep);
+            setElements(history[prevStep]);
+        }
+    };
+
+    const handleRedo = () => {
+        if (historyStep < history.length - 1) {
+            const nextStep = historyStep + 1;
+            setHistoryStep(nextStep);
+            setElements(history[nextStep]);
+        }
+    };
 
 
     useEffect(() => {
@@ -959,7 +997,8 @@ export const MemoEditor: React.FC<MemoEditorProps> = ({ noteId, onBack, onLinkCl
                 <button onClick={insertLink} className="p-2 hover:bg-muted" title="Insert Link"><LinkIcon size={18} /></button>
                 <button onClick={handleOCR} disabled={isProcessingOCR} className="p-2 hover:bg-muted" title="OCR (Scan)"><ScanText size={18} /></button>
 
-                <button onClick={() => setElements(e => e.slice(0, -1))} className="p-2 hover:bg-muted"><Undo size={18} /></button>
+                <button onClick={handleUndo} className="p-2 hover:bg-muted" disabled={historyStep <= 0}><Undo size={18} /></button>
+                {/* <button onClick={handleRedo} disabled={historyStep >= history.length - 1}><Redo size={18} /></button> */}
                 <button onClick={saveNote} className="p-2 hover:bg-muted text-primary"><Save size={18} /></button>
             </div>
 
